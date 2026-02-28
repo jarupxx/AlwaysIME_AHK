@@ -1,5 +1,5 @@
 ; ============================================================
-; AlwaysIME_AHK
+; AlwaysIME_AHK.ahk
 ; キー入力時にIMEを自動制御する常駐スクリプト
 ; AutoHotKey v2 対応
 ; ============================================================
@@ -300,7 +300,7 @@ global TitleOffPatterns := [
 ; タイトル変化の検出から除外するタグパターン（正規表現）
 ; マッチした部分を取り除いてからタイトルを比較する
 global TitleIgnoreTags := [
-    "\(更新\)",
+    ; "\(更新\)",
     "\s*\*$",
 ]
 
@@ -325,16 +325,50 @@ NormalizeTitle(title) {
 }
 
 ; ============================================================
+; フォーカスを持つ hwnd を返す
+; タブモード等でフレームhwndとフォーカスhwndが異なる場合に対応
+; GetGUIThreadInfo でフォーカスウィンドウを取得し、
+; 失敗した場合はフォールバックとして渡された hwnd をそのまま返す
+; ============================================================
+GetFocusedHwnd(hwnd) {
+    ; GUITHREADINFO 構造体（cbSize=72 固定）
+    ; typedef struct tagGUITHREADINFO {
+    ;   DWORD cbSize, flags;
+    ;   HWND hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+    ;   RECT rcCaret;
+    ; }
+    ; hwndFocus のオフセット = 4 + 4 + 8 = 16 バイト目（64bit: Ptr=8bytes）
+    cbSize := 72
+    buf := Buffer(cbSize, 0)
+    NumPut("UInt", cbSize, buf, 0)
+
+    threadId := DllCall("GetWindowThreadProcessId", "Ptr", hwnd, "Ptr", 0, "UInt")
+    ret := DllCall("GetGUIThreadInfo", "UInt", threadId, "Ptr", buf.Ptr, "Int")
+    if !ret {
+        Log("GetFocusedHwnd: GetGUIThreadInfo 失敗 (hwnd=" hwnd ")", "WARN")
+        return hwnd
+    }
+
+    ; hwndFocus はオフセット 16（cbSize:4 + flags:4 + hwndActive:8）
+    focusedHwnd := NumGet(buf, 16, "Ptr")
+    if (focusedHwnd = 0)
+        return hwnd
+
+    Log("GetFocusedHwnd: frame=" hwnd " focused=" focusedHwnd)
+    return focusedHwnd
+}
+
+; ============================================================
 ; IMEをONにする
 ; ============================================================
 IME_ON(hwnd) {
+    hwnd := GetFocusedHwnd(hwnd)
     hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
     if (hwndIme = 0) {
         Log("IME_ON: ImmGetDefaultIMEWnd 失敗 (hwnd=" hwnd ")", "WARN")
         return
     }
     DllCall("SendMessage", "Ptr", hwndIme, "UInt", WM_IME_CONTROL, "Ptr", IMC_SETOPENSTATUS, "Ptr", 1, "Ptr")
-    imeEnabled := DllCall("SendMessage", "Ptr", hwndIme, "UInt", WM_IME_CONTROL, "Ptr", IMC_GETOPENSTATUS, "Ptr", 0, "Ptr")
     Log("IME状態変化: → ON")
 }
 
@@ -342,6 +376,7 @@ IME_ON(hwnd) {
 ; IMEをOFFにする
 ; ============================================================
 IME_OFF(hwnd) {
+    hwnd := GetFocusedHwnd(hwnd)
     hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
     if (hwndIme = 0) {
         Log("IME_OFF: ImmGetDefaultIMEWnd 失敗 (hwnd=" hwnd ")", "WARN")
@@ -355,13 +390,11 @@ IME_OFF(hwnd) {
 ; ConversionModeをひらがなにセット（変化があればログ）
 ; ============================================================
 IME_SetHiragana(hwnd) {
+    hwnd := GetFocusedHwnd(hwnd)
     hImc := DllCall("imm32\ImmGetContext", "Ptr", hwnd, "Ptr")
     if (hImc = 0) {
         Log("IME_SetHiragana: ImmGetContext 失敗 (hwnd=" hwnd ")", "WARN")
         return
-    }
-    else {
-        Log("IME_SetHiragana: ImmGetContext 成功 (hwnd=" hwnd ")", "INFO")
     }
     beforeMode := 0
     DllCall("imm32\ImmGetConversionStatus", "Ptr", hImc, "UInt*", &beforeMode, "UInt*", 0)
