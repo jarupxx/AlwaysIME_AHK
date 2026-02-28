@@ -1,6 +1,6 @@
 ; ============================================================
 ; AlwaysIME_AHK
-; アルファベットキー入力時にIMEを自動で「ひらがな」モードへ切替
+; キー入力時にIMEを自動制御する常駐スクリプト
 ; AutoHotKey v2 対応
 ; ============================================================
 
@@ -9,32 +9,15 @@
 Persistent
 
 ; ============================================================
-; 設定：対象アプリの実行ファイル名リスト（小文字で記載）
-; 例："notepad++.exe", "code.exe", "chrome.exe"
-; ============================================================
-global TargetApps := [
-    "notepad++.exe",
-    "hidemaru.exe",
-    "code.exe",
-    "chrome.exe",
-    "msedge.exe"
-]
-
-; ============================================================
 ; ログ設定
 ; ============================================================
-global LogFilePath := A_ScriptDir "\AlwaysIME_AHK.log"  ; ログファイルパス
-global LogMaxLines := 500                                 ; 最大行数（超えたら .old へローテーション）
+global LogFilePath := A_ScriptDir "\AlwaysIME_AHK.log"
+global LogMaxLines := 500
 
-; ============================================================
-; ログ出力関数
-; level: "INFO" / "WARN" / "ERROR"
-; ============================================================
 Log(msg, level := "INFO") {
     timestamp := FormatTime(, "yyyy-MM-dd HH:mm:ss")
     line := "[" timestamp "] [" level "] " msg
     try {
-        ; 行数超過チェック → ローテーション
         if FileExist(LogFilePath) {
             lineCount := 0
             loop read LogFilePath
@@ -47,8 +30,7 @@ Log(msg, level := "INFO") {
             }
         }
         FileAppend line "`n", LogFilePath, "UTF-8"
-    } catch as e {
-        ; ログ書き込み失敗時はサイレントに無視（無限再帰防止）
+    } catch {
     }
 }
 
@@ -59,24 +41,16 @@ global WM_IME_CONTROL    := 0x283
 global IMC_GETOPENSTATUS := 0x005
 global IMC_SETOPENSTATUS := 0x006
 
-; ConversionMode ビットフラグ
-global IME_CMODE_NATIVE    := 1   ; ひらがな/カタカナ（日本語）
-global IME_CMODE_KATAKANA  := 2   ; カタカナ
-global IME_CMODE_FULLSHAPE := 8   ; 全角
-global IME_CMODE_ROMAN     := 16  ; ローマ字入力
+global IME_CMODE_NATIVE    := 1
+global IME_CMODE_KATAKANA  := 2
+global IME_CMODE_FULLSHAPE := 8
+global IME_CMODE_ROMAN     := 16
 
-; MS-IME 2024以降（IME_CMODE_ROMANビットが立たない）
-; 00: × IMEが無効                        0000 0000
-; 03: カ 半角カナ                         0000 0011
-; 08: Ａ 全角英数                         0000 1000
-; 09: あ ひらがな（漢字変換モード）       0000 1001
-; 11:    全角カナ                         0000 1011
 global CModeMS_HankakuKana := IME_CMODE_KATAKANA | IME_CMODE_NATIVE
 global CModeMS_ZenkakuEisu := IME_CMODE_FULLSHAPE
 global CModeMS_Hiragana    := IME_CMODE_FULLSHAPE | IME_CMODE_NATIVE
 global CModeMS_ZenkakuKana := IME_CMODE_FULLSHAPE | IME_CMODE_KATAKANA | IME_CMODE_NATIVE
 
-; ConversionModeの値を人間が読める文字列に変換
 CModeName(cmode) {
     if (cmode = CModeMS_Hiragana)
         return "あ ひらがな"
@@ -92,157 +66,262 @@ CModeName(cmode) {
 }
 
 ; ============================================================
-; IME制御関数
+; アプリ・タイトルごとの設定
 ; ============================================================
 
-; IMEのON/OFF状態を取得（1=ON, 0=OFF）
-IME_GET(WinTitle := "A") {
-    hwnd := WinExist(WinTitle)
-    if (hwnd = 0) {
-        Log("IME_GET: hwnd が見つかりません", "WARN")
-        return 0
-    }
-    hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
-    return DllCall("SendMessage", "Ptr", hwndIme, "UInt", WM_IME_CONTROL, "Ptr", IMC_GETOPENSTATUS, "Ptr", 0, "Ptr")
+; IMEを制御しないアプリ（完全一致・小文字）
+global IgnoreApps := [
+    ; "example.exe",
+]
+
+; キー入力のたびにIME-OFFを強制するアプリ（完全一致・小文字）
+global ForceOffApps := [
+    ; "putty.exe",
+]
+
+; タイトルの一部にマッチしたらIME-OFFにするパターン（正規表現）
+; アプリ問わず全体で有効
+global TitleOffPatterns := [
+    "\.cs$",
+    "\.js$",
+    "\.ts$",
+    "\.py$",
+    "\.ahk$",
+]
+
+; タイトル変化の検出から除外するタグパターン（正規表現）
+; マッチした部分を取り除いてからタイトルを比較する
+global TitleIgnoreTags := [
+    "\s*[\(\[『「][\*●○＊]?更新[済]?[\)\]』」]",
+    "\s*\*$",
+    "\s*•$",
+]
+
+; ============================================================
+; IME制御再開の判定に使う状態
+; ============================================================
+global LastProcessName := ""
+global LastWindowTitle := ""
+global IMEControlled   := false
+
+; 未入力タイムアウト（ミリ秒）
+global IdleTimeoutMs := 5 * 60 * 1000
+
+; ============================================================
+; タイトルからIgnoreTagsを取り除いて正規化する
+; ============================================================
+NormalizeTitle(title) {
+    result := title
+    for pattern in TitleIgnoreTags
+        result := RegExReplace(result, pattern, "")
+    return Trim(result)
 }
 
-; IMEをONにする（状態が変化した場合のみログ出力）
-IME_ON(WinTitle := "A") {
-    hwnd := WinExist(WinTitle)
-    if (hwnd = 0) {
-        Log("IME_ON: hwnd が見つかりません", "WARN")
+; ============================================================
+; IMEをONにする
+; ============================================================
+IME_ON(hwnd) {
+    hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
+    if (hwndIme = 0) {
+        Log("IME_ON: ImmGetDefaultIMEWnd 失敗 (hwnd=" hwnd ")", "WARN")
         return
     }
-    hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
     DllCall("SendMessage", "Ptr", hwndIme, "UInt", WM_IME_CONTROL, "Ptr", IMC_SETOPENSTATUS, "Ptr", 1, "Ptr")
-    Log("IME状態変化: OFF → ON")
+    Log("IME状態変化: → ON")
 }
 
-; IMEをひらがなモードに設定（ConversionModeが変化した場合のみログ出力）
-IME_SetHiragana(WinTitle := "A") {
-    hwnd := WinExist(WinTitle)
-    if (hwnd = 0) {
-        Log("IME_SetHiragana: hwnd が見つかりません", "WARN")
+; ============================================================
+; IMEをOFFにする
+; ============================================================
+IME_OFF(hwnd) {
+    hwndIme := DllCall("imm32\ImmGetDefaultIMEWnd", "Ptr", hwnd, "Ptr")
+    if (hwndIme = 0) {
+        Log("IME_OFF: ImmGetDefaultIMEWnd 失敗 (hwnd=" hwnd ")", "WARN")
         return
     }
+    DllCall("SendMessage", "Ptr", hwndIme, "UInt", WM_IME_CONTROL, "Ptr", IMC_SETOPENSTATUS, "Ptr", 0, "Ptr")
+    Log("IME状態変化: → OFF")
+}
+
+; ============================================================
+; ConversionModeをひらがなにセット（変化があればログ）
+; ============================================================
+IME_SetHiragana(hwnd) {
     hImc := DllCall("imm32\ImmGetContext", "Ptr", hwnd, "Ptr")
     if (hImc = 0) {
         Log("IME_SetHiragana: ImmGetContext 失敗 (hwnd=" hwnd ")", "WARN")
         return
     }
-    ; 変更前のConversionModeを取得
     beforeMode := 0
     DllCall("imm32\ImmGetConversionStatus", "Ptr", hImc, "UInt*", &beforeMode, "UInt*", 0)
-    ; ConversionMode: CModeMS_Hiragana = ひらがな（MS-IME 2024以降）
     DllCall("imm32\ImmSetConversionStatus", "Ptr", hImc, "UInt", CModeMS_Hiragana, "UInt", 0)
     DllCall("imm32\ImmReleaseContext", "Ptr", hwnd, "Ptr", hImc)
-    ; 変化があった場合のみログ出力
     if (beforeMode != CModeMS_Hiragana)
         Log("IME状態変化: " CModeName(beforeMode) " → " CModeName(CModeMS_Hiragana))
 }
 
-; 対象アプリかどうかチェック
-IsTargetApp() {
-    try {
-        processName := WinGetProcessName("A")
-        processName := StrLower(processName)
-        for app in TargetApps {
-            if (processName = app)
-                return true
-        }
-    }
-    return false
-}
+; ============================================================
+; IME制御を再開すべきか判定し、状態を更新する
+; 戻り値: true = 制御を実行すべき / false = 制御スキップ
+; ============================================================
+ShouldControl(processName, normalizedTitle) {
+    global LastProcessName, LastWindowTitle, IMEControlled, IdleTimeoutMs
 
-; IMEをONかつひらがなモードにして、キーを送信する共通処理
-EnsureHiraganaAndSend(key) {
-    if !IsTargetApp()
-        return false   ; 対象外アプリ → 通常処理に任せる
-
-    ; キー入力ログ（アプリ名付き）
-    try {
-        processName := WinGetProcessName("A")
-        Log("キー入力: `"" key "`" ← " processName)
+    idleMs := A_TimeIdlePhysical
+    if (idleMs >= IdleTimeoutMs) {
+        Log("再開トリガー: 未入力タイムアウト (" Round(idleMs/1000) "秒)")
+        IMEControlled := false
     }
 
-    ; IMEがOFFなら先にONにする（IME_ON内で状態変化ログを出力）
-    if (IME_GET("A") = 0) {
-        IME_ON("A")
-        Sleep 30
+    if (processName != LastProcessName) {
+        Log("再開トリガー: アプリ変化 (" LastProcessName " → " processName ")")
+        IMEControlled := false
+        LastProcessName := processName
+        LastWindowTitle := normalizedTitle
+        return true
     }
 
-    ; ひらがなモードに切替（変化があればIME_SetHiragana内でログ出力）
-    IME_SetHiragana("A")
-    Sleep 10
+    if (normalizedTitle != LastWindowTitle) {
+        Log("再開トリガー: タイトル変化 (`"" LastWindowTitle "`" → `"" normalizedTitle "`")")
+        IMEControlled := false
+        LastWindowTitle := normalizedTitle
+        return true
+    }
 
-    ; キーを送信
-    SendInput key
+    if IMEControlled
+        return false
+
     return true
 }
 
 ; ============================================================
-; アルファベットキーのフック（a-z / A-Z）
-; 対象アプリでのみ動作
+; キー入力ごとに呼ばれるメイン処理
+; ============================================================
+HandleKeyInput(key) {
+    hwnd := WinExist("A")
+    if (hwnd = 0)
+        return
+
+    processName := StrLower(WinGetProcessName("A"))
+    rawTitle    := WinGetTitle("A")
+    normTitle   := NormalizeTitle(rawTitle)
+
+    Log("キー入力: `"" key "`" app=" processName " title=`"" normTitle "`"")
+
+    ; IgnoreApps: 制御しない
+    for app in IgnoreApps {
+        if (processName = app) {
+            Log("スキップ: IgnoreApps に一致 (" processName ")")
+            SendInput key
+            return
+        }
+    }
+
+    ; ForceOffApps: 再開条件が揃ったときだけIME-OFFにして以後維持
+    for app in ForceOffApps {
+        if (processName = app) {
+            if ShouldControl(processName, normTitle) {
+                IME_OFF(hwnd)
+                global IMEControlled := true
+                global LastProcessName := processName
+                global LastWindowTitle := normTitle
+            }
+            SendInput key
+            return
+        }
+    }
+
+    ; TitleOffPatterns: タイトルにマッチしたらIME-OFF
+    for pattern in TitleOffPatterns {
+        if RegExMatch(rawTitle, pattern) {
+            Log("IME-OFF: TitleOffPattern に一致 (`"" pattern "`")")
+            IME_OFF(hwnd)
+            global IMEControlled := true
+            global LastProcessName := processName
+            global LastWindowTitle := normTitle
+            SendInput key
+            return
+        }
+    }
+
+    ; IME制御を再開すべきか判定
+    if !ShouldControl(processName, normTitle) {
+        SendInput key
+        return
+    }
+
+    ; IME-ON かつ ひらがなモードに設定
+    IME_ON(hwnd)
+    IME_SetHiragana(hwnd)
+
+    global IMEControlled := true
+    global LastProcessName := processName
+    global LastWindowTitle := normTitle
+
+    SendInput key
+}
+
+; ============================================================
+; 全キーのフック（a-z / A-Z）
+; #InputLevel 1 により、SendLevel 0（デフォルト）で送信した
+; キーはこのホットキーに再捕捉されない（無限ループ防止）
 ; ============================================================
 
-#HotIf IsTargetApp()
+#InputLevel 1
 
-a::EnsureHiraganaAndSend("a")
-b::EnsureHiraganaAndSend("b")
-c::EnsureHiraganaAndSend("c")
-d::EnsureHiraganaAndSend("d")
-e::EnsureHiraganaAndSend("e")
-f::EnsureHiraganaAndSend("f")
-g::EnsureHiraganaAndSend("g")
-h::EnsureHiraganaAndSend("h")
-i::EnsureHiraganaAndSend("i")
-j::EnsureHiraganaAndSend("j")
-k::EnsureHiraganaAndSend("k")
-l::EnsureHiraganaAndSend("l")
-m::EnsureHiraganaAndSend("m")
-n::EnsureHiraganaAndSend("n")
-o::EnsureHiraganaAndSend("o")
-p::EnsureHiraganaAndSend("p")
-q::EnsureHiraganaAndSend("q")
-r::EnsureHiraganaAndSend("r")
-s::EnsureHiraganaAndSend("s")
-t::EnsureHiraganaAndSend("t")
-u::EnsureHiraganaAndSend("u")
-v::EnsureHiraganaAndSend("v")
-w::EnsureHiraganaAndSend("w")
-x::EnsureHiraganaAndSend("x")
-y::EnsureHiraganaAndSend("y")
-z::EnsureHiraganaAndSend("z")
+a::HandleKeyInput("a")
+b::HandleKeyInput("b")
+c::HandleKeyInput("c")
+d::HandleKeyInput("d")
+e::HandleKeyInput("e")
+f::HandleKeyInput("f")
+g::HandleKeyInput("g")
+h::HandleKeyInput("h")
+i::HandleKeyInput("i")
+j::HandleKeyInput("j")
+k::HandleKeyInput("k")
+l::HandleKeyInput("l")
+m::HandleKeyInput("m")
+n::HandleKeyInput("n")
+o::HandleKeyInput("o")
+p::HandleKeyInput("p")
+q::HandleKeyInput("q")
+r::HandleKeyInput("r")
+s::HandleKeyInput("s")
+t::HandleKeyInput("t")
+u::HandleKeyInput("u")
+v::HandleKeyInput("v")
+w::HandleKeyInput("w")
+x::HandleKeyInput("x")
+y::HandleKeyInput("y")
+z::HandleKeyInput("z")
 
-; 大文字（Shift+アルファベット）も対応
-+a::EnsureHiraganaAndSend("A")
-+b::EnsureHiraganaAndSend("B")
-+c::EnsureHiraganaAndSend("C")
-+d::EnsureHiraganaAndSend("D")
-+e::EnsureHiraganaAndSend("E")
-+f::EnsureHiraganaAndSend("F")
-+g::EnsureHiraganaAndSend("G")
-+h::EnsureHiraganaAndSend("H")
-+i::EnsureHiraganaAndSend("I")
-+j::EnsureHiraganaAndSend("J")
-+k::EnsureHiraganaAndSend("K")
-+l::EnsureHiraganaAndSend("L")
-+m::EnsureHiraganaAndSend("M")
-+n::EnsureHiraganaAndSend("N")
-+o::EnsureHiraganaAndSend("O")
-+p::EnsureHiraganaAndSend("P")
-+q::EnsureHiraganaAndSend("Q")
-+r::EnsureHiraganaAndSend("R")
-+s::EnsureHiraganaAndSend("S")
-+t::EnsureHiraganaAndSend("T")
-+u::EnsureHiraganaAndSend("U")
-+v::EnsureHiraganaAndSend("V")
-+w::EnsureHiraganaAndSend("W")
-+x::EnsureHiraganaAndSend("X")
-+y::EnsureHiraganaAndSend("Y")
-+z::EnsureHiraganaAndSend("Z")
-
-#HotIf
++a::HandleKeyInput("A")
++b::HandleKeyInput("B")
++c::HandleKeyInput("C")
++d::HandleKeyInput("D")
++e::HandleKeyInput("E")
++f::HandleKeyInput("F")
++g::HandleKeyInput("G")
++h::HandleKeyInput("H")
++i::HandleKeyInput("I")
++j::HandleKeyInput("J")
++k::HandleKeyInput("K")
++l::HandleKeyInput("L")
++m::HandleKeyInput("M")
++n::HandleKeyInput("N")
++o::HandleKeyInput("O")
++p::HandleKeyInput("P")
++q::HandleKeyInput("Q")
++r::HandleKeyInput("R")
++s::HandleKeyInput("S")
++t::HandleKeyInput("T")
++u::HandleKeyInput("U")
++v::HandleKeyInput("V")
++w::HandleKeyInput("W")
++x::HandleKeyInput("X")
++y::HandleKeyInput("Y")
++z::HandleKeyInput("Z")
 
 ; ============================================================
 ; 起動・終了ログ／トレイメニュー設定
@@ -251,41 +330,47 @@ Log("=== AlwaysIME_AHK 起動 === (LogFile: " LogFilePath ")")
 OnExit((*) => Log("=== AlwaysIME_AHK 終了 ==="))
 
 A_TrayMenu.Delete()
-A_TrayMenu.Add("対象アプリ一覧を表示", ShowTargetApps)
-A_TrayMenu.Add("対象アプリを追加", AddTargetApp)
+A_TrayMenu.Add("設定を表示", ShowConfig)
 A_TrayMenu.Add()
 A_TrayMenu.Add("ログファイルを開く", OpenLogFile)
 A_TrayMenu.Add("ログファイルを削除", DeleteLogFile)
 A_TrayMenu.Add()
 A_TrayMenu.Add("終了", (*) => ExitApp())
-A_TrayMenu.Default := "対象アプリ一覧を表示"
+A_TrayMenu.Default := "設定を表示"
 TraySetIcon(A_AhkPath, 2)
 
 ; ============================================================
 ; トレイメニュー関数
 ; ============================================================
 
-ShowTargetApps(*) {
-    appList := ""
-    for i, app in TargetApps
-        appList .= i ". " app "`n"
-    MsgBox appList, "現在の対象アプリ一覧", "OK"
-}
+ShowConfig(*) {
+    msg := "=== IME制御しないアプリ (IgnoreApps) ===`n"
+    if (IgnoreApps.Length = 0)
+        msg .= "  (なし)`n"
+    for i, v in IgnoreApps
+        msg .= "  " i ". " v "`n"
 
-AddTargetApp(*) {
-    result := InputBox("追加するアプリの実行ファイル名を入力してください`n例: notepad++.exe", "対象アプリを追加")
-    if (result.Result = "OK" && result.Value != "") {
-        newApp := StrLower(Trim(result.Value))
-        for app in TargetApps {
-            if (app = newApp) {
-                MsgBox newApp " はすでに登録されています。", "情報"
-                return
-            }
-        }
-        TargetApps.Push(newApp)
-        Log("対象アプリを追加: " newApp)
-        MsgBox newApp " を追加しました。", "完了"
-    }
+    msg .= "`n=== IME-OFFを強制するアプリ (ForceOffApps) ===`n"
+    if (ForceOffApps.Length = 0)
+        msg .= "  (なし)`n"
+    for i, v in ForceOffApps
+        msg .= "  " i ". " v "`n"
+
+    msg .= "`n=== IME-OFFにするタイトルパターン (TitleOffPatterns) ===`n"
+    if (TitleOffPatterns.Length = 0)
+        msg .= "  (なし)`n"
+    for i, v in TitleOffPatterns
+        msg .= "  " i ". " v "`n"
+
+    msg .= "`n=== タイトル変化から除外するタグ (TitleIgnoreTags) ===`n"
+    if (TitleIgnoreTags.Length = 0)
+        msg .= "  (なし)`n"
+    for i, v in TitleIgnoreTags
+        msg .= "  " i ". " v "`n"
+
+    msg .= "`n未入力タイムアウト: " (IdleTimeoutMs // 1000) " 秒"
+
+    MsgBox msg, "AlwaysIME_AHK 設定一覧", "OK"
 }
 
 OpenLogFile(*) {
