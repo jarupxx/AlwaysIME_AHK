@@ -277,32 +277,31 @@ CModeName(cmode) {
 ; アプリ・タイトルごとの設定
 ; ============================================================
 
-; IMEを制御しないアプリ（完全一致・小文字）
+; IMEを制御しないアプリ（完全一致）
 global IgnoreApps := [
-    ; "example.exe",
+    "AutoHotkey64.exe",
 ]
 
-; キー入力のたびにIME-OFFを強制するアプリ（完全一致・小文字）
+; キー入力のたびにIME-OFFを強制するアプリ（完全一致）
 global ForceOffApps := [
-    ; "putty.exe",
+    ; "WindowsTerminal.exe",
 ]
 
 ; タイトルの一部にマッチしたらIME-OFFにするパターン（正規表現）
 ; アプリ問わず全体で有効
 global TitleOffPatterns := [
-    "\.cs$",
-    "\.js$",
-    "\.ts$",
-    "\.py$",
-    "\.ahk$",
+    "\.cs",
+    "\.js",
+    "\.ts",
+    "\.py",
+    "\.ahk",
 ]
 
 ; タイトル変化の検出から除外するタグパターン（正規表現）
 ; マッチした部分を取り除いてからタイトルを比較する
 global TitleIgnoreTags := [
-    "\s*[\(\[『「][\*●○＊]?更新[済]?[\)\]』」]",
+    "\(更新\)",
     "\s*\*$",
-    "\s*•$",
 ]
 
 ; ============================================================
@@ -573,25 +572,25 @@ global ConfigCategories := [
     Map(
         "key",   "IgnoreApps",
         "label", "制御しないアプリ",
-        "desc",  "IMEを一切操作しないアプリ。`n実行ファイル名を小文字で1行1件入力。`n例: putty.exe",
+        "desc",  "IMEを一切操作しないアプリ。`n実行ファイル名を1行1件入力。`n例: AutoHotkey64.exe",
         "type",  "list"
     ),
     Map(
         "key",   "ForceOffApps",
         "label", "IME-OFFアプリ",
-        "desc",  "アプリ切替・タイトル変化・タイムアウト時にIME-OFFにするアプリ。`n実行ファイル名を小文字で1行1件入力。`n例: cmd.exe",
+        "desc",  "アプリ切替・タイトル変化・タイムアウト時にIME-OFFにするアプリ。`n実行ファイル名を1行1件入力。`n例: WindowsTerminal.exe",
         "type",  "list"
     ),
     Map(
         "key",   "TitleOffPatterns",
         "label", "IME-OFFタイトルパターン",
-        "desc",  "ウィンドウタイトルにマッチしたらIME-OFFにする正規表現。`n1行1パターン。全アプリ共通。`n例: \.cs$",
+        "desc",  "ウィンドウタイトルにマッチしたらIME-OFFにする正規表現。`n1行1パターン。全アプリ共通。`n例: \.cs",
         "type",  "list"
     ),
     Map(
         "key",   "TitleIgnoreTags",
         "label", "タイトル除外タグ",
-        "desc",  "タイトル変化検出の際に無視する部分の正規表現。`nマッチした部分を除去してから変化を判定。`n例: \s*\*$",
+        "desc",  "タイトル変化検出の際に無視する部分の正規表現。`nマッチした部分を除去してから変化を判定。`n例: \(更新\)",
         "type",  "list"
     ),
     Map(
