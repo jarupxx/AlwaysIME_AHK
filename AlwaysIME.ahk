@@ -67,7 +67,15 @@ UpdateTrayIcon(mode) {
 ; WinEventHook: EVENT_SYSTEM_FOREGROUND と EVENT_OBJECT_NAMECHANGE
 ; ============================================================
 
-RefreshIconForActiveWindow() {
+; ============================================================
+; アクティブウィンドウに対してIME制御 + アイコン更新を行う
+; WinEventHook から SetTimer 経由で遅延呼び出しされる
+; ============================================================
+
+RefreshActiveWindow() {
+    ; SetTimer の1回起動なのでまず自分自身を解除
+    SetTimer RefreshActiveWindow, 0
+
     hwnd := WinExist("A")
     if (hwnd = 0)
         return
@@ -79,25 +87,43 @@ RefreshIconForActiveWindow() {
     }
     normTitle := NormalizeTitle(rawTitle)
 
+    ; IgnoreApps: 制御しない
     for app in IgnoreApps {
         if (processName = app) {
             UpdateTrayIcon("ignore")
             return
         }
     }
+
+    ; ForceOffApps: 再開条件が揃ったときだけIME-OFF
     for app in ForceOffApps {
         if (processName = app) {
             UpdateTrayIcon("ime_off")
-            return
-        }
-    }
-    for pattern in TitleOffPatterns {
-        if RegExMatch(rawTitle, pattern) {
-            UpdateTrayIcon("ime_off")
+            if ShouldControl(processName, normTitle) {
+                IME_OFF(hwnd)
+                global IMEControlled  := true
+                global LastProcessName := processName
+                global LastWindowTitle := normTitle
+            }
             return
         }
     }
 
+    ; TitleOffPatterns: タイトルにマッチしたらIME-OFF
+    for pattern in TitleOffPatterns {
+        if RegExMatch(rawTitle, pattern) {
+            UpdateTrayIcon("ime_off")
+            if ShouldControl(processName, normTitle) {
+                IME_OFF(hwnd)
+                global IMEControlled  := true
+                global LastProcessName := processName
+                global LastWindowTitle := normTitle
+            }
+            return
+        }
+    }
+
+    ; 制御済み判定（アプリ・タイトル変化なし＆タイムアウト未到達）
     idleMs := A_TimeIdlePhysical
     if (IMEControlled
         && processName = LastProcessName
@@ -107,14 +133,23 @@ RefreshIconForActiveWindow() {
         return
     }
 
+    ; 上記以外 → IME-ON + ひらがなモードに先行設定
     UpdateTrayIcon("ime_on")
+    IME_ON(hwnd)
+    IME_SetHiragana(hwnd)
+    global IMEControlled  := true
+    global LastProcessName := processName
+    global LastWindowTitle := normTitle
+    Log("WinEvent先行制御: IME-ON app=" processName " title=`"" normTitle "`"")
 }
 
 ; WinEventHook コールバック
+; DLLコールバックスレッドから呼ばれるため SetTimer で
+; AHKメインスレッドに処理を委譲する（遅延50ms）
 WinEventProc(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime) {
     if (idObject != 0)
         return
-    RefreshIconForActiveWindow()
+    SetTimer RefreshActiveWindow, -50
 }
 
 ; WinEventHook を登録する
