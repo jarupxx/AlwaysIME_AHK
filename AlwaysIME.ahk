@@ -146,7 +146,7 @@ RefreshActiveWindow() {
     global IMEControlled  := true
     global LastProcessName := processName
     global LastWindowTitle := normTitle
-    Log("WinEvent先行制御: IME-ON app=" processName " title=`"" normTitle "`"")
+    Log("WinEvent先行制御: IME-ON app=" processName " title=`"" normTitle "`"", "DEBUG")
 }
 
 ; WinEventHook コールバック
@@ -217,6 +217,12 @@ LoadConfig() {
     skipVal := IniRead(ConfigFilePath, "Advanced", "SkipEmptyTitle", "1")
     SkipEmptyTitle := (skipVal = "1")
 
+    logVal := IniRead(ConfigFilePath, "Advanced", "EnableLog", "0")
+    EnableLog := (logVal = "1")
+
+    confirmVal := IniRead(ConfigFilePath, "Advanced", "ConfirmExit", "1")
+    ConfirmExit := (confirmVal = "1")
+
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
       . " IgnoreApps=" IgnoreApps.Length
       . " ForceOffApps=" ForceOffApps.Length
@@ -234,6 +240,8 @@ SaveConfig() {
 
     IniWrite Round(IdleTimeoutMs / 1000), ConfigFilePath, "General", "IdleTimeoutSec"
     IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
+    IniWrite (EnableLog     ? "1" : "0"), ConfigFilePath, "Advanced", "EnableLog"
+    IniWrite (ConfirmExit   ? "1" : "0"), ConfigFilePath, "Advanced", "ConfirmExit"
 
     WriteIniList("IgnoreApps",       IgnoreApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
@@ -268,6 +276,8 @@ global LogFilePath := A_ScriptDir "\AlwaysIME_AHK.log"
 global LogMaxLines := 500
 
 Log(msg, level := "INFO") {
+    if !EnableLog
+        return
     timestamp := FormatTime(, "yyyy-MM-dd HH:mm:ss")
     line := "[" timestamp "] [" level "] " msg
     try {
@@ -356,6 +366,13 @@ global TitleIgnoreTags := [
 ; タイトルが空欄のウィンドウはIMEを制御しない
 global SkipEmptyTitle := true
 
+; .logファイルを生成する（初期値：しない）
+; オンにすると AlwaysIME_AHK.log へ動作ログを記録する
+global EnableLog := false
+
+; トレイメニューから終了するとき確認メッセージを表示する（初期値：オン）
+global ConfirmExit := true
+
 ; ============================================================
 ; IME制御再開の判定に使う状態
 ; ============================================================
@@ -406,7 +423,7 @@ GetFocusedHwnd(hwnd) {
     if (focusedHwnd = 0)
         return hwnd
 
-    Log("GetFocusedHwnd: frame=" hwnd " focused=" focusedHwnd)
+    Log("GetFocusedHwnd: frame=" hwnd " focused=" focusedHwnd, "DEBUG")
     return focusedHwnd
 }
 
@@ -502,11 +519,11 @@ HandleKeyInput(key) {
     rawTitle    := WinGetTitle("A")
     normTitle   := NormalizeTitle(rawTitle)
 
-    Log("キー入力: `"" key "`" app=" processName " title=`"" normTitle "`"")
+    Log("キー入力: `"" key "`" app=" processName " title=`"" normTitle "`"", "DEBUG")
 
     ; タイトル空欄スキップ（上級者向け設定）
     if (SkipEmptyTitle && rawTitle = "") {
-        Log("スキップ: タイトル空欄 (" processName ")")
+        Log("スキップ: タイトル空欄 (" processName ")", "DEBUG")
         UpdateTrayIcon("ignore")
         SendInput key
         return
@@ -515,7 +532,7 @@ HandleKeyInput(key) {
     ; IgnoreApps: 制御しない
     for app in IgnoreApps {
         if (processName = app) {
-            Log("スキップ: IgnoreApps に一致 (" processName ")")
+            Log("スキップ: IgnoreApps に一致 (" processName ")", "DEBUG")
             UpdateTrayIcon("ignore")
             SendInput key
             return
@@ -645,7 +662,7 @@ A_TrayMenu.Add()
 A_TrayMenu.Add("ログファイルを開く", OpenLogFile)
 A_TrayMenu.Add("ログファイルを削除", DeleteLogFile)
 A_TrayMenu.Add()
-A_TrayMenu.Add("終了", (*) => ExitApp())
+A_TrayMenu.Add("終了", OnMenuExit)
 A_TrayMenu.Default := "設定を表示"
 UpdateTrayIcon("ime_on")
 SetupWinEventHook()
@@ -653,6 +670,15 @@ SetupWinEventHook()
 ; ============================================================
 ; トレイメニュー関数
 ; ============================================================
+
+OnMenuExit(*) {
+    if ConfirmExit {
+        result := MsgBox("AlwaysIME_AHK を終了しますか？", "確認", "YesNo Icon?")
+        if (result != "Yes")
+            return
+    }
+    ExitApp()
+}
 
 ; ============================================================
 ; 設定画面
@@ -764,8 +790,14 @@ ShowConfig(*) {
 
     ; ---- 右ペイン：上級者向けチェックボックス ----
     chkSkipEmptyTitle := cfgGui.Add("Checkbox",
-        "x" RX " y" SP+DescH " w" RW " h24 vChkSkipEmpty Hidden",
+        "x" RX " y" SP+DescH    " w" RW " h24 vChkSkipEmpty Hidden",
         "タイトルが空欄のウィンドウはIMEを制御しない（推奨）")
+    chkDebugLog := cfgGui.Add("Checkbox",
+        "x" RX " y" SP+DescH+30 " w" RW " h24 vChkDebugLog Hidden",
+        ".logファイルを生成する（動作ログをファイルに記録する）")
+    chkConfirmExit := cfgGui.Add("Checkbox",
+        "x" RX " y" SP+DescH+60 " w" RW " h24 vChkConfirmExit Hidden",
+        "トレイメニューから終了するとき確認メッセージを表示する")
 
     cfgGui.Add("Text", "x0 y" BtnY-8 " w" W " h2 BackgroundTrans +0x10")
     btnSave   := cfgGui.Add("Button", "x" RX      " y" BtnY " w120 h28 Default", "保存して閉じる")
@@ -825,19 +857,21 @@ ShowConfig(*) {
 
         ; 全コントロールを一旦隠す
         HideAll() {
-            itemList.Visible   := false
-            btnAdd.Visible     := false
-            btnEdit.Visible    := false
-            btnDelete.Visible  := false
-            btnUp.Visible      := false
-            btnDown.Visible    := false
-            valLabel.Visible   := false
-            inputEdit.Visible  := false
-            btnAddOK.Visible   := false
-            spinRow.Visible    := false
-            spinCtrl.Visible   := false
-            spinUpDown.Visible := false
+            itemList.Visible          := false
+            btnAdd.Visible            := false
+            btnEdit.Visible           := false
+            btnDelete.Visible         := false
+            btnUp.Visible             := false
+            btnDown.Visible           := false
+            valLabel.Visible          := false
+            inputEdit.Visible         := false
+            btnAddOK.Visible          := false
+            spinRow.Visible           := false
+            spinCtrl.Visible          := false
+            spinUpDown.Visible        := false
             chkSkipEmptyTitle.Visible := false
+            chkDebugLog.Visible       := false
+            chkConfirmExit.Visible    := false
         }
 
         if (cat["type"] = "seconds") {
@@ -850,6 +884,10 @@ ShowConfig(*) {
             HideAll()
             chkSkipEmptyTitle.Visible := true
             chkSkipEmptyTitle.Value   := SkipEmptyTitle ? 1 : 0
+            chkDebugLog.Visible       := true
+            chkDebugLog.Value         := EnableLog ? 1 : 0
+            chkConfirmExit.Visible    := true
+            chkConfirmExit.Value      := ConfirmExit ? 1 : 0
         } else {
             HideAll()
             itemList.Visible   := true
@@ -961,6 +999,8 @@ ShowConfig(*) {
             global IdleTimeoutMs := Integer(spinCtrl.Value) * 1000
         } else if (cat["type"] = "advanced") {
             global SkipEmptyTitle := (chkSkipEmptyTitle.Value = 1)
+            global EnableLog      := (chkDebugLog.Value = 1)
+            global ConfirmExit    := (chkConfirmExit.Value = 1)
         } else {
             arr := []
             for v in currentItems
