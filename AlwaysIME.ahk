@@ -87,6 +87,12 @@ RefreshActiveWindow() {
     }
     normTitle := NormalizeTitle(rawTitle)
 
+    ; タイトル空欄スキップ（上級者向け設定）
+    if (SkipEmptyTitle && rawTitle = "") {
+        UpdateTrayIcon("ignore")
+        return
+    }
+
     ; IgnoreApps: 制御しない
     for app in IgnoreApps {
         if (processName = app) {
@@ -208,6 +214,9 @@ LoadConfig() {
     timeoutSec := IniRead(ConfigFilePath, "General", "IdleTimeoutSec", "300")
     IdleTimeoutMs := Integer(timeoutSec) * 1000
 
+    skipVal := IniRead(ConfigFilePath, "Advanced", "SkipEmptyTitle", "1")
+    SkipEmptyTitle := (skipVal = "1")
+
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
       . " IgnoreApps=" IgnoreApps.Length
       . " ForceOffApps=" ForceOffApps.Length
@@ -224,6 +233,7 @@ SaveConfig() {
         FileDelete ConfigFilePath
 
     IniWrite Round(IdleTimeoutMs / 1000), ConfigFilePath, "General", "IdleTimeoutSec"
+    IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
 
     WriteIniList("IgnoreApps",       IgnoreApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
@@ -338,6 +348,13 @@ global TitleIgnoreTags := [
     ; "\(更新\)",
     "\s*\*$",
 ]
+
+; ============================================================
+; 上級者向け設定
+; ============================================================
+
+; タイトルが空欄のウィンドウはIMEを制御しない
+global SkipEmptyTitle := true
 
 ; ============================================================
 ; IME制御再開の判定に使う状態
@@ -486,6 +503,14 @@ HandleKeyInput(key) {
     normTitle   := NormalizeTitle(rawTitle)
 
     Log("キー入力: `"" key "`" app=" processName " title=`"" normTitle "`"")
+
+    ; タイトル空欄スキップ（上級者向け設定）
+    if (SkipEmptyTitle && rawTitle = "") {
+        Log("スキップ: タイトル空欄 (" processName ")")
+        UpdateTrayIcon("ignore")
+        SendInput key
+        return
+    }
 
     ; IgnoreApps: 制御しない
     for app in IgnoreApps {
@@ -667,6 +692,12 @@ global ConfigCategories := [
         "desc",  "この時間キーボード・マウス未入力が続いたらIME制御を再開する。`n秒単位で入力。",
         "type",  "seconds"
     ),
+    Map(
+        "key",   "Advanced",
+        "label", "上級者向け設定",
+        "desc",  "動作に詳しい方向けの設定です。`n通常は変更不要です。",
+        "type",  "advanced"
+    ),
 ]
 
 ; 現在選択中のカテゴリーインデックス
@@ -731,6 +762,11 @@ ShowConfig(*) {
         "x" RX+64 " y" SP+DescH " w80 h24 vSpinCtrl Hidden Number")
     spinUpDown := cfgGui.Add("UpDown", "vSpinUpDown Range10-3600 Hidden", 300)
 
+    ; ---- 右ペイン：上級者向けチェックボックス ----
+    chkSkipEmptyTitle := cfgGui.Add("Checkbox",
+        "x" RX " y" SP+DescH " w" RW " h24 vChkSkipEmpty Hidden",
+        "タイトルが空欄のウィンドウはIMEを制御しない（推奨）")
+
     cfgGui.Add("Text", "x0 y" BtnY-8 " w" W " h2 BackgroundTrans +0x10")
     btnSave   := cfgGui.Add("Button", "x" RX      " y" BtnY " w120 h28 Default", "保存して閉じる")
     btnApply  := cfgGui.Add("Button", "x" RX+124  " y" BtnY " w80  h28",          "適用")
@@ -787,7 +823,8 @@ ShowConfig(*) {
         cat := ConfigCategories[idx]
         descLabel.Value := cat["desc"]
 
-        if (cat["type"] = "seconds") {
+        ; 全コントロールを一旦隠す
+        HideAll() {
             itemList.Visible   := false
             btnAdd.Visible     := false
             btnEdit.Visible    := false
@@ -797,11 +834,24 @@ ShowConfig(*) {
             valLabel.Visible   := false
             inputEdit.Visible  := false
             btnAddOK.Visible   := false
+            spinRow.Visible    := false
+            spinCtrl.Visible   := false
+            spinUpDown.Visible := false
+            chkSkipEmptyTitle.Visible := false
+        }
+
+        if (cat["type"] = "seconds") {
+            HideAll()
             spinRow.Visible    := true
             spinCtrl.Visible   := true
             spinUpDown.Visible := true
             spinCtrl.Value     := Round(IdleTimeoutMs / 1000)
+        } else if (cat["type"] = "advanced") {
+            HideAll()
+            chkSkipEmptyTitle.Visible := true
+            chkSkipEmptyTitle.Value   := SkipEmptyTitle ? 1 : 0
         } else {
+            HideAll()
             itemList.Visible   := true
             btnAdd.Visible     := true
             btnEdit.Visible    := true
@@ -811,9 +861,6 @@ ShowConfig(*) {
             valLabel.Visible   := true
             inputEdit.Visible  := true
             btnAddOK.Visible   := true
-            spinRow.Visible    := false
-            spinCtrl.Visible   := false
-            spinUpDown.Visible := false
 
             currentItems := []
             for v in GetGlobalArray(cat["key"])
@@ -912,6 +959,8 @@ ShowConfig(*) {
         cat := ConfigCategories[idx]
         if (cat["type"] = "seconds") {
             global IdleTimeoutMs := Integer(spinCtrl.Value) * 1000
+        } else if (cat["type"] = "advanced") {
+            global SkipEmptyTitle := (chkSkipEmptyTitle.Value = 1)
         } else {
             arr := []
             for v in currentItems
