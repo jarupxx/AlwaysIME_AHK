@@ -22,3 +22,7 @@ Windows 11
 AutoHotkey v2 https://www.autohotkey.com/
 
 AutoHotkey v2 Installer [直接リンク](https://www.autohotkey.com/download/ahk-v2.exe)
+
+## 開発について
+
+このプロジェクトの開発にはClaudeを活用しています
