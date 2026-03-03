@@ -56,8 +56,8 @@ UpdateTrayIcon(mode) {
         TraySetIcon fb[1], fb[2]
     }
 
-    tip := (mode = "ime_on")  ? "AlwaysIME_AHK: 次キーでIME-ONにします"
-         : (mode = "ime_off") ? "AlwaysIME_AHK: 次キーでIME-OFFにします"
+    tip := (mode = "ime_on")  ? "AlwaysIME_AHK"
+         : (mode = "ime_off") ? "AlwaysIME_AHK"
          : "AlwaysIME_AHK: このアプリはIME制御対象外"
     A_IconTip := tip
 }
@@ -359,7 +359,7 @@ global IME_COMMA_PERIOD  := 0
 global IME_TOUTEN_KUTENN := 1
 global IME_TOUTEN_PERIOD := 2
 global IME_COMMA_KUTENN  := 3
-global PunctuationLabels := ["，．", "、。", "、．", "，。"]
+global PunctuationLabels := ["「，．」", "「、。」", "「、．」", "「，。」"]
 
 ; ビットマスクのシフト量とマスク
 global OPTION1_PUNCT_SHIFT := 16
@@ -586,30 +586,28 @@ RebuildMsImeMenu() {
 }
 
 ; ============================================================
-; 切替項目のラベルを現在値で更新する（有効時のみ）
+; 切替項目のラベルを「クリックしたら何に変わるか」で更新する（有効時のみ）
 ; ============================================================
 UpdateMsImeMenu() {
     global MsImeSettingsEnabled, CurInputSpace, CurOption1
-    global SpaceTargetVal, PunctTargetVal
+    global SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
 
     if !MsImeSettingsEnabled
         return
 
-    ; スペース切替（位置6）
-    curSpaceLabel  := (CurInputSpace >= 0 && CurInputSpace <= 2)
-        ? InputSpaceLabels[CurInputSpace + 1] : "─"
-    nextSpaceLabel := (SpaceTargetVal >= 0 && SpaceTargetVal <= 2)
-        ? InputSpaceLabels[SpaceTargetVal + 1] : "─"
-    spaceArrow := (CurInputSpace = SpaceTargetVal) ? "← 戻す" : "→ " nextSpaceLabel
-    A_TrayMenu.Rename("6&", "スペース [" curSpaceLabel "]  " spaceArrow)
+    ; スペース切替（位置6）：クリック後に適用される値のラベルを表示
+    spaceInitVal  := (SpaceInitVal >= 0) ? SpaceInitVal : CurInputSpace
+    nextSpace     := (CurInputSpace = SpaceTargetVal) ? spaceInitVal : SpaceTargetVal
+    nextSpaceLabel := (nextSpace >= 0 && nextSpace <= 2)
+        ? InputSpaceLabels[nextSpace + 1] : "─"
+    A_TrayMenu.Rename("6&", "スペース：" nextSpaceLabel " に切替")
 
-    ; 句読点切替（位置7）
-    curPunctLabel  := (CurOption1 >= 0 && CurOption1 <= 3)
-        ? PunctuationLabels[CurOption1 + 1] : "─"
-    nextPunctLabel := (PunctTargetVal >= 0 && PunctTargetVal <= 3)
-        ? PunctuationLabels[PunctTargetVal + 1] : "─"
-    punctArrow := (CurOption1 = PunctTargetVal) ? "← 戻す" : "→ " nextPunctLabel
-    A_TrayMenu.Rename("7&", "句読点 [" curPunctLabel "]  " punctArrow)
+    ; 句読点切替（位置7）：クリック後に適用される値のラベルを表示
+    punctInitVal  := (PunctInitVal >= 0) ? PunctInitVal : CurOption1
+    nextPunct     := (CurOption1 = PunctTargetVal) ? punctInitVal : PunctTargetVal
+    nextPunctLabel := (nextPunct >= 0 && nextPunct <= 3)
+        ? PunctuationLabels[nextPunct + 1] : "─"
+    A_TrayMenu.Rename("7&", "句読点：" nextPunctLabel " に切替")
 }
 
 ; MS-IME入力設定の有効/無効をトグル
