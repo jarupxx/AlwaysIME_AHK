@@ -188,6 +188,8 @@ TeardownWinEventHook() {
 
 OnExitHandler(*) {
     TeardownWinEventHook()
+    if MsImeSettingsEnabled
+        RestoreMsImeRegistry()
     Log("=== AlwaysIME_AHK 終了 ===")
 }
 
@@ -223,11 +225,25 @@ LoadConfig() {
     confirmVal := IniRead(ConfigFilePath, "Advanced", "ConfirmExit", "1")
     ConfirmExit := (confirmVal = "1")
 
+    global MsImeSettingsEnabled, SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
+    msimeVal := IniRead(ConfigFilePath, "MsIme", "Enabled", "0")
+    MsImeSettingsEnabled := false   ; 読み込み後に EnableMsImeSettings() で有効化する
+    SpaceInitVal   := Integer(IniRead(ConfigFilePath, "MsIme", "SpaceInitVal",   "0"))
+    SpaceTargetVal := Integer(IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "2"))
+    PunctInitVal   := Integer(IniRead(ConfigFilePath, "MsIme", "PunctInitVal",   "1"))
+    PunctTargetVal := Integer(IniRead(ConfigFilePath, "MsIme", "PunctTargetVal", "0"))
+
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
       . " IgnoreApps=" IgnoreApps.Length
       . " ForceOffApps=" ForceOffApps.Length
       . " TitleOffPatterns=" TitleOffPatterns.Length
-      . " TitleIgnoreTags=" TitleIgnoreTags.Length ")")
+      . " TitleIgnoreTags=" TitleIgnoreTags.Length
+      . " MsIme=" msimeVal ")")
+
+    ; MS-IME設定は他の初期化が終わった後に有効化する必要があるため
+    ; トレイメニュー構築後に呼ばれるよう SetTimer で遅延実行する
+    if (msimeVal = "1")
+        SetTimer(() => EnableMsImeSettings(), -1)
 }
 
 ; INIファイルへ設定を書き出す
@@ -242,6 +258,12 @@ SaveConfig() {
     IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
     IniWrite (EnableLog     ? "1" : "0"), ConfigFilePath, "Advanced", "EnableLog"
     IniWrite (ConfirmExit   ? "1" : "0"), ConfigFilePath, "Advanced", "ConfirmExit"
+
+    IniWrite (MsImeSettingsEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "Enabled"
+    IniWrite SpaceInitVal,   ConfigFilePath, "MsIme", "SpaceInitVal"
+    IniWrite SpaceTargetVal, ConfigFilePath, "MsIme", "SpaceTargetVal"
+    IniWrite PunctInitVal,   ConfigFilePath, "MsIme", "PunctInitVal"
+    IniWrite PunctTargetVal, ConfigFilePath, "MsIme", "PunctTargetVal"
 
     WriteIniList("IgnoreApps",       IgnoreApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
@@ -295,6 +317,308 @@ Log(msg, level := "INFO") {
         FileAppend line "`n", LogFilePath, "UTF-8"
     } catch {
     }
+}
+
+; ============================================================
+; MS-IME 入力設定（レジストリ制御）
+; ============================================================
+
+; レジストリパス
+global MSIME_REG_PATH := "HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME"
+
+; --- スペース制御 (InputSpace) ---
+; 0: 現在の入力モード相当（ここでは全角扱い）
+; 1: 常に全角
+; 2: 常に半角
+global IME_AUTO_WIDTH_SPACE := 0
+global IME_FULL_WIDTH_SPACE := 1
+global IME_HALF_WIDTH_SPACE := 2
+; インデックス 1-based: [1]=値0, [2]=値1, [3]=値2
+global InputSpaceLabels := ["現在の入力モード", "常に全角", "常に半角"]
+
+; MS-IME入力設定機能の有効/無効（初期値：オフ）
+global MsImeSettingsEnabled := false
+
+; 起動時に読み込んだ元の値（終了時復元用）
+global OrigInputSpace   := -1   ; -1 = 未取得
+global OrigOption1      := -1
+
+; 現在スクリプトが書き込んでいる値（-1 = 未変更）
+global CurInputSpace    := -1
+global CurOption1       := -1
+
+; ユーザー設定：スペースの初期値と切替先（レジストリ値 0-2）
+; 起動時にレジストリから読んだ値を初期値として使う（-1 = レジストリ実値を使用）
+global SpaceInitVal   := -1   ; -1 = レジストリ実値をそのまま使う
+global SpaceTargetVal := IME_FULL_WIDTH_SPACE    ; 切替先デフォルト: 常に全角
+
+; --- 句読点制御 (option1 ビットマスク) ---
+; ビット位置: (value >> 16) & 0x3
+; 0: ，．  1: 、。  2: 、．  3: ，。
+global IME_COMMA_PERIOD  := 0
+global IME_TOUTEN_KUTENN := 1
+global IME_TOUTEN_PERIOD := 2
+global IME_COMMA_KUTENN  := 3
+global PunctuationLabels := ["，．", "、。", "、．", "，。"]
+
+; ビットマスクのシフト量とマスク
+global OPTION1_PUNCT_SHIFT := 16
+global OPTION1_PUNCT_MASK  := 0x3
+
+; ユーザー設定：句読点の初期値と切替先（0-3）
+global PunctInitVal   := -1   ; -1 = レジストリ実値をそのまま使う
+global PunctTargetVal := IME_COMMA_KUTENN    ; 切替先デフォルト: ，。
+
+; ============================================================
+; MS-IME レジストリ読み書きユーティリティ
+; ============================================================
+
+; InputSpace レジストリ値を読む（失敗時は -1）
+ReadInputSpace() {
+    try {
+        val := RegRead(MSIME_REG_PATH, "InputSpace")
+        return Integer(val)
+    } catch {
+        return -1
+    }
+}
+
+; InputSpace レジストリ値を書く
+WriteInputSpace(val) {
+    try {
+        RegWrite val, "REG_DWORD", MSIME_REG_PATH, "InputSpace"
+        Log("WriteInputSpace: " val)
+        return true
+    } catch as e {
+        Log("WriteInputSpace 失敗: " e.Message, "WARN")
+        return false
+    }
+}
+
+; option1 レジストリ値を読む（失敗時は -1）
+ReadOption1() {
+    try {
+        val := RegRead(MSIME_REG_PATH, "option1")
+        return Integer(val)
+    } catch {
+        return -1
+    }
+}
+
+; option1 の句読点ビット(bits 17-16)を val(0-3) に設定して書く
+WriteOption1Punct(punctMode) {
+    try {
+        current := ReadOption1()
+        if (current = -1) {
+            Log("WriteOption1Punct: option1 読み取り失敗", "WARN")
+            return false
+        }
+        ; 既存のビット17-16をクリアして新値をセット
+        newVal := (current & ~(OPTION1_PUNCT_MASK << OPTION1_PUNCT_SHIFT))
+               | ((punctMode & OPTION1_PUNCT_MASK) << OPTION1_PUNCT_SHIFT)
+        RegWrite newVal, "REG_DWORD", MSIME_REG_PATH, "option1"
+        Log("WriteOption1Punct: punctMode=" punctMode " option1: " current " → " newVal)
+        return true
+    } catch as e {
+        Log("WriteOption1Punct 失敗: " e.Message, "WARN")
+        return false
+    }
+}
+
+; option1 から現在の句読点モード(0-3)を読む
+ReadOption1Punct() {
+    val := ReadOption1()
+    if (val = -1)
+        return -1
+    return (val >> OPTION1_PUNCT_SHIFT) & OPTION1_PUNCT_MASK
+}
+
+; ============================================================
+; MS-IME入力設定を有効化（レジストリ保存 + 初期切替）
+; ============================================================
+EnableMsImeSettings() {
+    global MsImeSettingsEnabled, OrigInputSpace, OrigOption1, CurInputSpace, CurOption1
+    global SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
+
+    ; 元の値を保存（初回のみ）
+    if (OrigInputSpace = -1) {
+        OrigInputSpace := ReadInputSpace()
+        Log("MS-IME設定有効化: OrigInputSpace=" OrigInputSpace)
+    }
+    if (OrigOption1 = -1) {
+        OrigOption1 := ReadOption1()
+        Log("MS-IME設定有効化: OrigOption1=" OrigOption1)
+    }
+
+    MsImeSettingsEnabled := true
+
+    ; スペース：設定された初期値をレジストリに書き込む
+    ; SpaceInitVal = -1 → レジストリ実値のまま（変更しない）
+    ; SpaceInitVal >= 0 → 指定値を書き込む
+    if (SpaceInitVal >= 0) {
+        CurInputSpace := SpaceInitVal
+        WriteInputSpace(CurInputSpace)
+    } else if (CurInputSpace = -1) {
+        ; 初期値未指定かつ初回: レジストリ実値をCurに記録するだけ
+        CurInputSpace := (OrigInputSpace >= 0) ? OrigInputSpace : IME_FULL_WIDTH_SPACE
+    }
+
+    ; 句読点：設定された初期値をレジストリに書き込む
+    if (PunctInitVal >= 0) {
+        CurOption1 := PunctInitVal
+        WriteOption1Punct(CurOption1)
+    } else if (CurOption1 = -1) {
+        initPunct := ReadOption1Punct()
+        CurOption1 := (initPunct >= 0) ? initPunct : IME_TOUTEN_KUTENN
+    }
+
+    RebuildMsImeMenu()
+    Log("MS-IME入力設定 有効化完了 space=" CurInputSpace "→" SpaceTargetVal " punct=" CurOption1 "→" PunctTargetVal)
+}
+
+; ============================================================
+; MS-IME入力設定を無効化（レジストリ復元）
+; ============================================================
+DisableMsImeSettings() {
+    global MsImeSettingsEnabled
+    MsImeSettingsEnabled := false
+    RestoreMsImeRegistry()
+    RebuildMsImeMenu()
+    Log("MS-IME入力設定 無効化")
+}
+
+; レジストリを元の値に復元する（終了時・無効化時）
+RestoreMsImeRegistry() {
+    global OrigInputSpace, OrigOption1, CurInputSpace, CurOption1
+
+    if (OrigInputSpace >= 0) {
+        WriteInputSpace(OrigInputSpace)
+        Log("レジストリ復元: InputSpace=" OrigInputSpace)
+    }
+    if (OrigOption1 >= 0) {
+        try {
+            RegWrite OrigOption1, "REG_DWORD", MSIME_REG_PATH, "option1"
+            Log("レジストリ復元: option1=" OrigOption1)
+        } catch as e {
+            Log("option1 復元失敗: " e.Message, "WARN")
+        }
+    }
+
+    CurInputSpace := -1
+    CurOption1    := -1
+}
+
+; ============================================================
+; スペース切替（メニュー操作ごと：現在値 ↔ 切替先 を交互）
+; ============================================================
+ToggleInputSpace(*) {
+    global CurInputSpace, MsImeSettingsEnabled, SpaceInitVal, SpaceTargetVal
+    if !MsImeSettingsEnabled
+        return
+    ; 現在が切替先なら初期値へ、そうでなければ切替先へ
+    initVal := (SpaceInitVal >= 0) ? SpaceInitVal : CurInputSpace
+    CurInputSpace := (CurInputSpace = SpaceTargetVal) ? initVal : SpaceTargetVal
+    WriteInputSpace(CurInputSpace)
+    UpdateMsImeMenu()
+    Log("スペース切替 → " CurInputSpace " (" InputSpaceLabels[CurInputSpace + 1] ")")
+}
+
+; ============================================================
+; 句読点切替（メニュー操作ごと：現在値 ↔ 切替先 を交互）
+; ============================================================
+TogglePunctuation(*) {
+    global CurOption1, MsImeSettingsEnabled, PunctInitVal, PunctTargetVal
+    if !MsImeSettingsEnabled
+        return
+    ; 現在が切替先なら初期値へ、そうでなければ切替先へ
+    initVal := (PunctInitVal >= 0) ? PunctInitVal : CurOption1
+    CurOption1 := (CurOption1 = PunctTargetVal) ? initVal : PunctTargetVal
+    WriteOption1Punct(CurOption1)
+    UpdateMsImeMenu()
+    Log("句読点切替 → " CurOption1 " (" PunctuationLabels[CurOption1 + 1] ")")
+}
+
+; ============================================================
+; トレイメニューに切替項目を動的に追加・削除する
+;
+; 無効時の構成（固定）:
+;   1: 設定を表示
+;   2: セパレータ
+;   3: ログファイルを開く
+;   4: ログファイルを削除
+;   5: セパレータ
+;   6: 終了
+;
+; 有効時の構成（切替項目を終了の直前に挿入）:
+;   1: 設定を表示
+;   2: セパレータ
+;   3: ログファイルを開く
+;   4: ログファイルを削除
+;   5: セパレータ
+;   6: 句読点切替
+;   7: スペース切替
+;   8: セパレータ
+;   9: 終了
+; ============================================================
+RebuildMsImeMenu() {
+    global MsImeSettingsEnabled, TrayMenuHasMsImeItems
+
+    if MsImeSettingsEnabled {
+        if !TrayMenuHasMsImeItems {
+            ; 「終了」の前（位置6）にセパレータ・切替項目を挿入
+            ; Insert は指定位置の「前」に追加される
+            A_TrayMenu.Insert("6&")                              ; セパレータ
+            A_TrayMenu.Insert("6&", "句読点切替", TogglePunctuation)
+            A_TrayMenu.Insert("6&", "スペース切替", ToggleInputSpace)
+            TrayMenuHasMsImeItems := true
+        }
+        UpdateMsImeMenu()
+    } else {
+        if TrayMenuHasMsImeItems {
+            ; 挿入した3項目（スペース切替・句読点切替・セパレータ）を削除
+            ; 有効時の構成: 6=スペース切替 7=句読点切替 8=セパレータ
+            A_TrayMenu.Delete("8&")
+            A_TrayMenu.Delete("7&")
+            A_TrayMenu.Delete("6&")
+            TrayMenuHasMsImeItems := false
+        }
+    }
+}
+
+; ============================================================
+; 切替項目のラベルを現在値で更新する（有効時のみ）
+; ============================================================
+UpdateMsImeMenu() {
+    global MsImeSettingsEnabled, CurInputSpace, CurOption1
+    global SpaceTargetVal, PunctTargetVal
+
+    if !MsImeSettingsEnabled
+        return
+
+    ; スペース切替（位置6）
+    curSpaceLabel  := (CurInputSpace >= 0 && CurInputSpace <= 2)
+        ? InputSpaceLabels[CurInputSpace + 1] : "─"
+    nextSpaceLabel := (SpaceTargetVal >= 0 && SpaceTargetVal <= 2)
+        ? InputSpaceLabels[SpaceTargetVal + 1] : "─"
+    spaceArrow := (CurInputSpace = SpaceTargetVal) ? "← 戻す" : "→ " nextSpaceLabel
+    A_TrayMenu.Rename("6&", "スペース [" curSpaceLabel "]  " spaceArrow)
+
+    ; 句読点切替（位置7）
+    curPunctLabel  := (CurOption1 >= 0 && CurOption1 <= 3)
+        ? PunctuationLabels[CurOption1 + 1] : "─"
+    nextPunctLabel := (PunctTargetVal >= 0 && PunctTargetVal <= 3)
+        ? PunctuationLabels[PunctTargetVal + 1] : "─"
+    punctArrow := (CurOption1 = PunctTargetVal) ? "← 戻す" : "→ " nextPunctLabel
+    A_TrayMenu.Rename("7&", "句読点 [" curPunctLabel "]  " punctArrow)
+}
+
+; MS-IME入力設定の有効/無効をトグル
+ToggleMsImeSettings(*) {
+    global MsImeSettingsEnabled
+    if MsImeSettingsEnabled
+        DisableMsImeSettings()
+    else
+        EnableMsImeSettings()
 }
 
 ; ============================================================
@@ -656,6 +980,9 @@ Log("=== AlwaysIME_AHK 起動 === (LogFile: " LogFilePath ")")
 LoadConfig()
 OnExit(OnExitHandler)
 
+; MS-IME入力設定サブメニューは廃止。切替項目はメインメニューに直接追加する。
+global TrayMenuHasMsImeItems := false
+
 A_TrayMenu.Delete()
 A_TrayMenu.Add("設定を表示", ShowConfig)
 A_TrayMenu.Add()
@@ -723,6 +1050,12 @@ global ConfigCategories := [
         "label", "上級者向け設定",
         "desc",  "動作に詳しい方向けの設定です。`n通常は変更不要です。",
         "type",  "advanced"
+    ),
+    Map(
+        "key",   "MsIme",
+        "label", "MS-IME入力設定",
+        "desc",  "MS-IMEのスペース・句読点をレジストリ経由で制御します。`n有効にするとトレイメニューから切替できます。`n終了時はレジストリを元の値に復元します。",
+        "type",  "msime"
     ),
 ]
 
@@ -799,6 +1132,49 @@ ShowConfig(*) {
         "x" RX " y" SP+DescH+60 " w" RW " h24 vChkConfirmExit Hidden",
         "トレイメニューから終了するとき確認メッセージを表示する")
 
+    ; ---- MS-IMEパネル（msimeタイプ専用） ----
+    msimePanelChk := cfgGui.Add("Checkbox",
+        "x" RX " y" SP+DescH " w" RW " h24 vMsImePanelChk Hidden",
+        "MS-IME入力設定を有効にする")
+
+    ; 左カラム：スペース設定  右カラム：句読点設定
+    HalfW := (RW - 16) // 2
+    ColL  := RX
+    ColR  := RX + HalfW + 16
+    LblW  := 52                          ; ラベル幅（「初期値：」「切替先：」）
+    DDW   := Round((HalfW - LblW - 4) * 0.8)   ; ドロップダウン幅（元より2割減）
+    DDX   := LblW + 4                   ; ラベルからDDまでのオフセット
+
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+34 " w" HalfW " h18 vMsImeLblSpace Hidden BackgroundTrans",
+        "── スペース ──────────")
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+56 " w" LblW " h20 vMsImeLblSpaceInit Hidden BackgroundTrans",
+        "初期値：")
+    msimeSpaceInit := cfgGui.Add("DropDownList",
+        "x" ColL+DDX " y" SP+DescH+53 " w" DDW " h120 vMsImeSpaceInit Hidden",
+        InputSpaceLabels)
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+84 " w" LblW " h20 vMsImeLblSpaceTo Hidden BackgroundTrans",
+        "切替先：")
+    msimeSpaceTo := cfgGui.Add("DropDownList",
+        "x" ColL+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImeSpaceTo Hidden",
+        InputSpaceLabels)
+
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+34 " w" HalfW " h18 vMsImeLblPunct Hidden BackgroundTrans",
+        "── 句読点 ──────────")
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+56 " w" LblW " h20 vMsImeLblPunctInit Hidden BackgroundTrans",
+        "初期値：")
+    msimePunctInit := cfgGui.Add("DropDownList",
+        "x" ColR+DDX " y" SP+DescH+53 " w" DDW " h120 vMsImePunctInit Hidden",
+        PunctuationLabels)
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+84 " w" LblW " h20 vMsImeLblPunctTo Hidden BackgroundTrans",
+        "切替先：")
+    msimePunctTo := cfgGui.Add("DropDownList",
+        "x" ColR+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImePunctTo Hidden",
+        PunctuationLabels)
+
+    cfgGui.Add("Text",
+        "x" RX " y" SP+DescH+116 " w" RW " h48 vMsImeHint Hidden BackgroundTrans",
+        "初期値：有効化時にMS-IMEへ書き込む設定値。「現在の入力モード」は変更なし。`n切替先：トレイ右クリック → MS-IME入力設定 から切替ボタンを押したときの値。`nもう一度押すと初期値に戻ります。終了時はレジストリを元の値に復元します。")
+
     cfgGui.Add("Text", "x0 y" BtnY-8 " w" W " h2 BackgroundTrans +0x10")
     btnSave   := cfgGui.Add("Button", "x" RX      " y" BtnY " w120 h28 Default", "保存して閉じる")
     btnApply  := cfgGui.Add("Button", "x" RX+124  " y" BtnY " w80  h28",          "適用")
@@ -872,6 +1248,15 @@ ShowConfig(*) {
             chkSkipEmptyTitle.Visible := false
             chkDebugLog.Visible       := false
             chkConfirmExit.Visible    := false
+            ; msimeパネル
+            for ctrl in [msimePanelChk,
+                         msimeSpaceInit, msimeSpaceTo,
+                         msimePunctInit, msimePunctTo]
+                ctrl.Visible := false
+            for v in ["MsImeLblSpace","MsImeLblSpaceInit","MsImeLblSpaceTo",
+                      "MsImeLblPunct","MsImeLblPunctInit","MsImeLblPunctTo",
+                      "MsImeHint"]
+                cfgGui[v].Visible := false
         }
 
         if (cat["type"] = "seconds") {
@@ -888,6 +1273,24 @@ ShowConfig(*) {
             chkDebugLog.Value         := EnableLog ? 1 : 0
             chkConfirmExit.Visible    := true
             chkConfirmExit.Value      := ConfirmExit ? 1 : 0
+        } else if (cat["type"] = "msime") {
+            HideAll()
+            msimePanelChk.Visible := true
+            msimePanelChk.Value   := MsImeSettingsEnabled ? 1 : 0
+            for ctrl in [msimeSpaceInit, msimeSpaceTo, msimePunctInit, msimePunctTo]
+                ctrl.Visible := true
+            for v in ["MsImeLblSpace","MsImeLblSpaceInit","MsImeLblSpaceTo",
+                      "MsImeLblPunct","MsImeLblPunctInit","MsImeLblPunctTo",
+                      "MsImeHint"]
+                cfgGui[v].Visible := true
+            ; DropDownListに現在の設定値を反映（1-based。レジストリ値+1がインデックス）
+            ; SpaceInitVal が -1（未設定）のときは 0（現在の入力モード）扱いで index=1
+            siVal := (SpaceInitVal < 0) ? 0 : SpaceInitVal
+            piVal := (PunctInitVal < 0) ? 0 : PunctInitVal
+            msimeSpaceInit.Choose(siVal + 1)
+            msimeSpaceTo.Choose(SpaceTargetVal + 1)
+            msimePunctInit.Choose(piVal + 1)
+            msimePunctTo.Choose(PunctTargetVal + 1)
         } else {
             HideAll()
             itemList.Visible   := true
@@ -1001,6 +1404,22 @@ ShowConfig(*) {
             global SkipEmptyTitle := (chkSkipEmptyTitle.Value = 1)
             global EnableLog      := (chkDebugLog.Value = 1)
             global ConfirmExit    := (chkConfirmExit.Value = 1)
+        } else if (cat["type"] = "msime") {
+            ; DropDownList.Value は 1-based → レジストリ値 = Value - 1
+            global SpaceInitVal   := msimeSpaceInit.Value - 1   ; 1→0, 2→1, 3→2
+            global SpaceTargetVal := msimeSpaceTo.Value - 1
+            global PunctInitVal   := msimePunctInit.Value - 1
+            global PunctTargetVal := msimePunctTo.Value - 1
+            ; 有効/無効のトグル
+            newMsIme := (msimePanelChk.Value = 1)
+            if (newMsIme != MsImeSettingsEnabled) {
+                if newMsIme
+                    EnableMsImeSettings()
+                else
+                    DisableMsImeSettings()
+            } else if MsImeSettingsEnabled {
+                UpdateMsImeMenu()
+            }
         } else {
             arr := []
             for v in currentItems
