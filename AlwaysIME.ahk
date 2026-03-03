@@ -1283,13 +1283,21 @@ ShowConfig(*) {
                       "MsImeLblPunct","MsImeLblPunctInit","MsImeLblPunctTo",
                       "MsImeHint"]
                 cfgGui[v].Visible := true
-            ; DropDownListに現在の設定値を反映（1-based。レジストリ値+1がインデックス）
-            ; SpaceInitVal が -1（未設定）のときは 0（現在の入力モード）扱いで index=1
-            siVal := (SpaceInitVal < 0) ? 0 : SpaceInitVal
-            piVal := (PunctInitVal < 0) ? 0 : PunctInitVal
-            msimeSpaceInit.Choose(siVal + 1)
+
+            ; 初期値欄：現在のレジストリ実値を表示する
+            ; 有効化済みなら復元用に保存した OrigInputSpace を使い、
+            ; 未有効化なら直接レジストリから読む
+            regSpace := (OrigInputSpace >= 0) ? OrigInputSpace : ReadInputSpace()
+            regPunct := ReadOption1Punct()
+            ; 読み取り失敗時はデフォルト値にフォールバック
+            if (regSpace < 0)
+                regSpace := 0
+            if (regPunct < 0)
+                regPunct := IME_TOUTEN_KUTENN
+
+            msimeSpaceInit.Choose(regSpace + 1)
             msimeSpaceTo.Choose(SpaceTargetVal + 1)
-            msimePunctInit.Choose(piVal + 1)
+            msimePunctInit.Choose(regPunct + 1)
             msimePunctTo.Choose(PunctTargetVal + 1)
         } else {
             HideAll()
