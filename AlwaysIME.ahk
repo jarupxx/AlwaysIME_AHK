@@ -115,7 +115,7 @@ RefreshActiveWindow() {
         }
     }
 
-    ; TitleOffPatterns: タイトルにマッチしたらIME-OFF
+    ; TitleOffPatterns: タイトルにマッチしたら再開条件時のみIME-OFF
     for pattern in TitleOffPatterns {
         if RegExMatch(rawTitle, pattern) {
             UpdateTrayIcon("ime_off")
@@ -878,14 +878,16 @@ HandleKeyInput(key) {
         }
     }
 
-    ; TitleOffPatterns: タイトルにマッチしたらIME-OFF
+    ; TitleOffPatterns: タイトルにマッチしたら再開条件時のみIME-OFF
     for pattern in TitleOffPatterns {
         if RegExMatch(rawTitle, pattern) {
-            Log("IME-OFF: TitleOffPattern に一致 (`"" pattern "`")")
-            IME_OFF(hwnd)
-            global IMEControlled := true
-            global LastProcessName := processName
-            global LastWindowTitle := normTitle
+            if ShouldControl(processName, normTitle) {
+                Log("IME-OFF: TitleOffPattern に一致 (`"" pattern "`")")
+                IME_OFF(hwnd)
+                global IMEControlled   := true
+                global LastProcessName := processName
+                global LastWindowTitle := normTitle
+            }
             UpdateTrayIcon("ime_off")
             SendInput key
             return
@@ -1030,7 +1032,7 @@ global ConfigCategories := [
     Map(
         "key",   "TitleOffPatterns",
         "label", "IME-OFFタイトルパターン",
-        "desc",  "ウィンドウタイトルにマッチしたらIME-OFFにする正規表現。`n1行1パターン。全アプリ共通。`n例: \.cs",
+        "desc",  "ウィンドウタイトルにマッチしたら、アプリ切替・タイトル変化などでIME-OFFにする正規表現。`n1行1パターン。全アプリ共通。`n例: \.cs$",
         "type",  "list"
     ),
     Map(
