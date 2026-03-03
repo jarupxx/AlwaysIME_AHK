@@ -207,6 +207,7 @@ LoadConfig() {
     Log("設定ファイルを読み込みます: " ConfigFilePath)
 
     global IgnoreApps, ForceOffApps, TitleOffPatterns, TitleIgnoreTags, IdleTimeoutMs
+    global SkipEmptyTitle, EnableLog, ConfirmExit
 
     IgnoreApps      := ReadIniList("IgnoreApps")
     ForceOffApps    := ReadIniList("ForceOffApps")
