@@ -194,6 +194,120 @@ OnExitHandler(*) {
 }
 
 ; ============================================================
+; UTF-8対応 INI 読み書きユーティリティ
+; 標準の Utf8IniRead/Utf8IniWrite はCP932のため自前実装する
+; ============================================================
+
+; INIファイルを UTF-8 で読み込み、全行を配列で返す
+_IniReadLines(path) {
+    lines := []
+    if !FileExist(path)
+        return lines
+    text := FileRead(path, "UTF-8")
+    loop parse, text, "`n", "`r"
+        lines.Push(A_LoopField)
+    return lines
+}
+
+; UTF-8 INI から値を読む。見つからない場合は default を返す
+Utf8IniRead(path, section, key, default := "") {
+    lines   := _IniReadLines(path)
+    inSec   := false
+    keyNorm := Trim(key)
+    secNorm := Trim(section)
+
+    for line in lines {
+        if RegExMatch(line, "^\s*[;#]")
+            continue
+        if RegExMatch(line, "^\s*\[(.+)\]\s*$", &m) {
+            inSec := (Trim(m[1]) = secNorm)
+            continue
+        }
+        if !inSec
+            continue
+        if RegExMatch(line, "^\s*([^=]+?)\s*=\s*(.*?)\s*$", &m) {
+            if (Trim(m[1]) = keyNorm)
+                return m[2]
+        }
+    }
+    return default
+}
+
+; UTF-8 INI に値を書く（セクション・キーが存在すれば上書き、なければ追記）
+Utf8IniWrite(value, path, section, key) {
+    lines   := _IniReadLines(path)
+    secNorm := Trim(section)
+    keyNorm := Trim(key)
+    newLine := key "=" value
+
+    secStart := 0
+    secEnd   := 0
+    keyLine  := 0
+
+    i := 1
+    for line in lines {
+        if RegExMatch(line, "^\s*\[(.+)\]\s*$", &m) {
+            if (Trim(m[1]) = secNorm)
+                secStart := i
+            else if (secStart && !secEnd)
+                secEnd := i
+        }
+        if (secStart && !secEnd && !keyLine) {
+            if RegExMatch(line, "^\s*([^=]+?)\s*=", &m) {
+                if (Trim(m[1]) = keyNorm)
+                    keyLine := i
+            }
+        }
+        i++
+    }
+
+    if keyLine {
+        lines[keyLine] := newLine
+    } else if secStart {
+        insertAt := secEnd ? secEnd - 1 : lines.Length
+        loop {
+            if (insertAt > secStart && Trim(lines[insertAt]) = "")
+                insertAt--
+            else
+                break
+        }
+        lines.InsertAt(insertAt + 1, newLine)
+    } else {
+        if (lines.Length && Trim(lines[lines.Length]) != "")
+            lines.Push("")
+        lines.Push("[" section "]")
+        lines.Push(newLine)
+    }
+
+    _IniWriteLines(path, lines)
+}
+
+; セクションごと削除する（WriteIniList用）
+_IniDeleteSection(path, section) {
+    lines   := _IniReadLines(path)
+    secNorm := Trim(section)
+    out     := []
+    inSec   := false
+    for line in lines {
+        if RegExMatch(line, "^\s*\[(.+)\]\s*$", &m)
+            inSec := (Trim(m[1]) = secNorm)
+        if !inSec
+            out.Push(line)
+    }
+    _IniWriteLines(path, out)
+}
+
+; 行配列を UTF-8（BOMなし）でファイルに書き出す
+_IniWriteLines(path, lines) {
+    text := ""
+    for i, line in lines
+        text .= (i = 1 ? "" : "`r`n") line
+    if FileExist(path)
+        FileDelete path
+    FileAppend text, path, "UTF-8-RAW"
+}
+
+; ============================================================
 ; 設定ファイルの読み書き
 ; ============================================================
 
@@ -214,25 +328,25 @@ LoadConfig() {
     TitleOffPatterns := ReadIniList("TitleOffPatterns")
     TitleIgnoreTags := ReadIniList("TitleIgnoreTags")
 
-    timeoutSec := IniRead(ConfigFilePath, "General", "IdleTimeoutSec", "300")
+    timeoutSec := Utf8IniRead(ConfigFilePath, "General", "IdleTimeoutSec", "300")
     IdleTimeoutMs := Integer(timeoutSec) * 1000
 
-    skipVal := IniRead(ConfigFilePath, "Advanced", "SkipEmptyTitle", "1")
+    skipVal := Utf8IniRead(ConfigFilePath, "Advanced", "SkipEmptyTitle", "1")
     SkipEmptyTitle := (skipVal = "1")
 
-    logVal := IniRead(ConfigFilePath, "Advanced", "EnableLog", "0")
+    logVal := Utf8IniRead(ConfigFilePath, "Advanced", "EnableLog", "0")
     EnableLog := (logVal = "1")
 
-    confirmVal := IniRead(ConfigFilePath, "Advanced", "ConfirmExit", "1")
+    confirmVal := Utf8IniRead(ConfigFilePath, "Advanced", "ConfirmExit", "1")
     ConfirmExit := (confirmVal = "1")
 
     global MsImeSettingsEnabled, SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
-    msimeVal := IniRead(ConfigFilePath, "MsIme", "Enabled", "0")
+    msimeVal := Utf8IniRead(ConfigFilePath, "MsIme", "Enabled", "0")
     MsImeSettingsEnabled := false   ; 読み込み後に EnableMsImeSettings() で有効化する
-    SpaceInitVal   := Integer(IniRead(ConfigFilePath, "MsIme", "SpaceInitVal",   "0"))
-    SpaceTargetVal := Integer(IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "2"))
-    PunctInitVal   := Integer(IniRead(ConfigFilePath, "MsIme", "PunctInitVal",   "1"))
-    PunctTargetVal := Integer(IniRead(ConfigFilePath, "MsIme", "PunctTargetVal", "0"))
+    SpaceInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceInitVal",   "0"))
+    SpaceTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "2"))
+    PunctInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctInitVal",   "1"))
+    PunctTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctTargetVal", "0"))
 
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
       . " IgnoreApps=" IgnoreApps.Length
@@ -255,16 +369,16 @@ SaveConfig() {
     if FileExist(ConfigFilePath)
         FileDelete ConfigFilePath
 
-    IniWrite Round(IdleTimeoutMs / 1000), ConfigFilePath, "General", "IdleTimeoutSec"
-    IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
-    IniWrite (EnableLog     ? "1" : "0"), ConfigFilePath, "Advanced", "EnableLog"
-    IniWrite (ConfirmExit   ? "1" : "0"), ConfigFilePath, "Advanced", "ConfirmExit"
+    Utf8IniWrite Round(IdleTimeoutMs / 1000), ConfigFilePath, "General", "IdleTimeoutSec"
+    Utf8IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
+    Utf8IniWrite (EnableLog     ? "1" : "0"), ConfigFilePath, "Advanced", "EnableLog"
+    Utf8IniWrite (ConfirmExit   ? "1" : "0"), ConfigFilePath, "Advanced", "ConfirmExit"
 
-    IniWrite (MsImeSettingsEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "Enabled"
-    IniWrite SpaceInitVal,   ConfigFilePath, "MsIme", "SpaceInitVal"
-    IniWrite SpaceTargetVal, ConfigFilePath, "MsIme", "SpaceTargetVal"
-    IniWrite PunctInitVal,   ConfigFilePath, "MsIme", "PunctInitVal"
-    IniWrite PunctTargetVal, ConfigFilePath, "MsIme", "PunctTargetVal"
+    Utf8IniWrite (MsImeSettingsEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "Enabled"
+    Utf8IniWrite SpaceInitVal,   ConfigFilePath, "MsIme", "SpaceInitVal"
+    Utf8IniWrite SpaceTargetVal, ConfigFilePath, "MsIme", "SpaceTargetVal"
+    Utf8IniWrite PunctInitVal,   ConfigFilePath, "MsIme", "PunctInitVal"
+    Utf8IniWrite PunctTargetVal, ConfigFilePath, "MsIme", "PunctTargetVal"
 
     WriteIniList("IgnoreApps",       IgnoreApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
@@ -279,7 +393,7 @@ ReadIniList(section) {
     arr := []
     i := 1
     loop {
-        val := IniRead(ConfigFilePath, section, "Item" i, "")
+        val := Utf8IniRead(ConfigFilePath, section, "Item" i, "")
         if (val = "")
             break
         arr.Push(val)
@@ -289,9 +403,11 @@ ReadIniList(section) {
 }
 
 ; 配列を [Section] の Item1, Item2, ... として書き出す
+; セクションを一旦削除してから書き直すことで古い項目の残留を防ぐ
 WriteIniList(section, arr) {
+    _IniDeleteSection(ConfigFilePath, section)
     for i, v in arr
-        IniWrite v, ConfigFilePath, section, "Item" i
+        Utf8IniWrite v, ConfigFilePath, section, "Item" i
 }
 
 
