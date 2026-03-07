@@ -341,12 +341,20 @@ LoadConfig() {
     ConfirmExit := (confirmVal = "1")
 
     global MsImeSettingsEnabled, SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
+    global KeyAssignmentEnabled
     msimeVal := Utf8IniRead(ConfigFilePath, "MsIme", "Enabled", "0")
     MsImeSettingsEnabled := false   ; 読み込み後に EnableMsImeSettings() で有効化する
     SpaceInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceInitVal",   "0"))
     SpaceTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "2"))
     PunctInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctInitVal",   "1"))
     PunctTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctTargetVal", "0"))
+    keyAssignVal := Utf8IniRead(ConfigFilePath, "MsIme", "KeyAssignmentEnabled", "__NOTSET__")
+    if (keyAssignVal = "__NOTSET__") {
+        ; INIに未記録 → グローバル変数の初期値（レジストリ実値）をそのまま使用
+        Log("KeyAssignmentEnabled: INI未設定のためレジストリ実値を使用 (" KeyAssignmentEnabled ")")
+    } else {
+        KeyAssignmentEnabled := (keyAssignVal = "1")
+    }
 
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
       . " IgnoreApps=" IgnoreApps.Length
@@ -379,6 +387,7 @@ SaveConfig() {
     Utf8IniWrite SpaceTargetVal, ConfigFilePath, "MsIme", "SpaceTargetVal"
     Utf8IniWrite PunctInitVal,   ConfigFilePath, "MsIme", "PunctInitVal"
     Utf8IniWrite PunctTargetVal, ConfigFilePath, "MsIme", "PunctTargetVal"
+    Utf8IniWrite (KeyAssignmentEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "KeyAssignmentEnabled"
 
     WriteIniList("IgnoreApps",       IgnoreApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
@@ -486,6 +495,14 @@ global OPTION1_PUNCT_MASK  := 0x3
 global PunctInitVal   := -1   ; -1 = レジストリ実値をそのまま使う
 global PunctTargetVal := IME_COMMA_KUTENN    ; 切替先デフォルト: ，。
 
+; --- 変換/無変換キーへのIMEオン・オフ割り当て ---
+; IsKeyAssignmentEnabled : 0=無効 / 1=有効
+; KeyAssignmentHenkan    : 0=IME-ON（変換キー）
+; KeyAssignmentMuhenkan  : 1=IME-OFF（無変換キー）
+; 初期値はレジストリ実値から読む（INIが存在すれば後でLoadConfigが上書き）
+global KeyAssignmentEnabled := (RegRead("HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME", "IsKeyAssignmentEnabled", 0) = 1)
+global OrigKeyAssignmentEnabled := -1  ; 起動時の元の値（-1=未取得）
+
 ; ============================================================
 ; MS-IME レジストリ読み書きユーティリティ
 ; ============================================================
@@ -551,11 +568,52 @@ ReadOption1Punct() {
 }
 
 ; ============================================================
+; キー割り当て（変換/無変換→IMEオン・オフ）レジストリ読み書き
+; ============================================================
+
+; IsKeyAssignmentEnabled を読む（失敗時は -1）
+ReadKeyAssignment() {
+    try {
+        val := RegRead(MSIME_REG_PATH, "IsKeyAssignmentEnabled")
+        return Integer(val)
+    } catch {
+        return -1
+    }
+}
+
+; キー割り当てを有効化する（3値をまとめて書く）
+WriteKeyAssignmentEnable() {
+    try {
+        RegWrite 1, "REG_DWORD", MSIME_REG_PATH, "IsKeyAssignmentEnabled"
+        RegWrite 0, "REG_DWORD", MSIME_REG_PATH, "KeyAssignmentHenkan"
+        RegWrite 1, "REG_DWORD", MSIME_REG_PATH, "KeyAssignmentMuhenkan"
+        Log("WriteKeyAssignment: 有効化 (Henkan=IME-ON, Muhenkan=IME-OFF)")
+        return true
+    } catch as e {
+        Log("WriteKeyAssignment 有効化失敗: " e.Message, "WARN")
+        return false
+    }
+}
+
+; キー割り当てを無効化する（IsKeyAssignmentEnabled=0 のみ書く）
+WriteKeyAssignmentDisable() {
+    try {
+        RegWrite 0, "REG_DWORD", MSIME_REG_PATH, "IsKeyAssignmentEnabled"
+        Log("WriteKeyAssignment: 無効化")
+        return true
+    } catch as e {
+        Log("WriteKeyAssignment 無効化失敗: " e.Message, "WARN")
+        return false
+    }
+}
+
+; ============================================================
 ; MS-IME入力設定を有効化（レジストリ保存 + 初期切替）
 ; ============================================================
 EnableMsImeSettings() {
     global MsImeSettingsEnabled, OrigInputSpace, OrigOption1, CurInputSpace, CurOption1
     global SpaceInitVal, SpaceTargetVal, PunctInitVal, PunctTargetVal
+    global KeyAssignmentEnabled, OrigKeyAssignmentEnabled
 
     ; 元の値を保存（初回のみ）
     if (OrigInputSpace = -1) {
@@ -565,6 +623,10 @@ EnableMsImeSettings() {
     if (OrigOption1 = -1) {
         OrigOption1 := ReadOption1()
         Log("MS-IME設定有効化: OrigOption1=" OrigOption1)
+    }
+    if (OrigKeyAssignmentEnabled = -1) {
+        OrigKeyAssignmentEnabled := ReadKeyAssignment()
+        Log("MS-IME設定有効化: OrigKeyAssignmentEnabled=" OrigKeyAssignmentEnabled)
     }
 
     MsImeSettingsEnabled := true
@@ -589,8 +651,14 @@ EnableMsImeSettings() {
         CurOption1 := (initPunct >= 0) ? initPunct : IME_TOUTEN_KUTENN
     }
 
+    ; キー割り当て：ユーザー設定に応じてレジストリへ書き込む
+    if KeyAssignmentEnabled
+        WriteKeyAssignmentEnable()
+    else
+        WriteKeyAssignmentDisable()
+
     RebuildMsImeMenu()
-    Log("MS-IME入力設定 有効化完了 space=" CurInputSpace "→" SpaceTargetVal " punct=" CurOption1 "→" PunctTargetVal)
+    Log("MS-IME入力設定 有効化完了 space=" CurInputSpace "→" SpaceTargetVal " punct=" CurOption1 "→" PunctTargetVal " keyAssign=" KeyAssignmentEnabled)
 }
 
 ; ============================================================
@@ -607,6 +675,7 @@ DisableMsImeSettings() {
 ; レジストリを元の値に復元する（終了時・無効化時）
 RestoreMsImeRegistry() {
     global OrigInputSpace, OrigOption1, CurInputSpace, CurOption1
+    global OrigKeyAssignmentEnabled
 
     if (OrigInputSpace >= 0) {
         WriteInputSpace(OrigInputSpace)
@@ -618,6 +687,14 @@ RestoreMsImeRegistry() {
             Log("レジストリ復元: option1=" OrigOption1)
         } catch as e {
             Log("option1 復元失敗: " e.Message, "WARN")
+        }
+    }
+    if (OrigKeyAssignmentEnabled >= 0) {
+        try {
+            RegWrite OrigKeyAssignmentEnabled, "REG_DWORD", MSIME_REG_PATH, "IsKeyAssignmentEnabled"
+            Log("レジストリ復元: IsKeyAssignmentEnabled=" OrigKeyAssignmentEnabled)
+        } catch as e {
+            Log("IsKeyAssignmentEnabled 復元失敗: " e.Message, "WARN")
         }
     }
 
@@ -1250,9 +1327,13 @@ ShowConfig(*) {
         "トレイメニューから終了するとき確認メッセージを表示する")
 
     ; ---- MS-IMEパネル（msimeタイプ専用） ----
+    msimeKeyAssignChk := cfgGui.Add("Checkbox",
+        "x" RX " y" SP+DescH " w" RW " h24 vMsImeKeyAssignChk Hidden",
+        "変換キー→IME-ON / 無変換キー→IME-OFFに割り当てる")
+
     msimePanelChk := cfgGui.Add("Checkbox",
-        "x" RX " y" SP+DescH " w" RW " h24 vMsImePanelChk Hidden",
-        "MS-IME入力設定を有効にする")
+        "x" RX " y" SP+DescH+28 " w" RW " h24 vMsImePanelChk Hidden",
+        "スペース / 句読点切替を有効にする")
 
     ; 左カラム：スペース設定  右カラム：句読点設定
     HalfW := (RW - 16) // 2
@@ -1262,34 +1343,34 @@ ShowConfig(*) {
     DDW   := Round((HalfW - LblW - 4) * 0.8)   ; ドロップダウン幅（元より2割減）
     DDX   := LblW + 4                   ; ラベルからDDまでのオフセット
 
-    cfgGui.Add("Text", "x" ColL " y" SP+DescH+34 " w" HalfW " h18 vMsImeLblSpace Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+62 " w" HalfW " h18 vMsImeLblSpace Hidden BackgroundTrans",
         "── スペース ──────────")
-    cfgGui.Add("Text", "x" ColL " y" SP+DescH+56 " w" LblW " h20 vMsImeLblSpaceInit Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+84 " w" LblW " h20 vMsImeLblSpaceInit Hidden BackgroundTrans",
         "初期値：")
     msimeSpaceInit := cfgGui.Add("DropDownList",
-        "x" ColL+DDX " y" SP+DescH+53 " w" DDW " h120 vMsImeSpaceInit Hidden",
+        "x" ColL+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImeSpaceInit Hidden",
         InputSpaceLabels)
-    cfgGui.Add("Text", "x" ColL " y" SP+DescH+84 " w" LblW " h20 vMsImeLblSpaceTo Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColL " y" SP+DescH+112 " w" LblW " h20 vMsImeLblSpaceTo Hidden BackgroundTrans",
         "切替先：")
     msimeSpaceTo := cfgGui.Add("DropDownList",
-        "x" ColL+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImeSpaceTo Hidden",
+        "x" ColL+DDX " y" SP+DescH+109 " w" DDW " h120 vMsImeSpaceTo Hidden",
         InputSpaceLabels)
 
-    cfgGui.Add("Text", "x" ColR " y" SP+DescH+34 " w" HalfW " h18 vMsImeLblPunct Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+62 " w" HalfW " h18 vMsImeLblPunct Hidden BackgroundTrans",
         "── 句読点 ──────────")
-    cfgGui.Add("Text", "x" ColR " y" SP+DescH+56 " w" LblW " h20 vMsImeLblPunctInit Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+84 " w" LblW " h20 vMsImeLblPunctInit Hidden BackgroundTrans",
         "初期値：")
     msimePunctInit := cfgGui.Add("DropDownList",
-        "x" ColR+DDX " y" SP+DescH+53 " w" DDW " h120 vMsImePunctInit Hidden",
+        "x" ColR+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImePunctInit Hidden",
         PunctuationLabels)
-    cfgGui.Add("Text", "x" ColR " y" SP+DescH+84 " w" LblW " h20 vMsImeLblPunctTo Hidden BackgroundTrans",
+    cfgGui.Add("Text", "x" ColR " y" SP+DescH+112 " w" LblW " h20 vMsImeLblPunctTo Hidden BackgroundTrans",
         "切替先：")
     msimePunctTo := cfgGui.Add("DropDownList",
-        "x" ColR+DDX " y" SP+DescH+81 " w" DDW " h120 vMsImePunctTo Hidden",
+        "x" ColR+DDX " y" SP+DescH+109 " w" DDW " h120 vMsImePunctTo Hidden",
         PunctuationLabels)
 
     cfgGui.Add("Text",
-        "x" RX " y" SP+DescH+116 " w" RW " h48 vMsImeHint Hidden BackgroundTrans",
+        "x" RX " y" SP+DescH+144 " w" RW " h48 vMsImeHint Hidden BackgroundTrans",
         "初期値：有効化時にMS-IMEへ書き込む設定値。「現在の入力モード」は変更なし。`n切替先：トレイ右クリック → MS-IME入力設定 から切替ボタンを押したときの値。`nもう一度押すと初期値に戻ります。終了時はレジストリを元の値に復元します。")
 
     cfgGui.Add("Text", "x0 y" BtnY-8 " w" W " h2 BackgroundTrans +0x10")
@@ -1367,6 +1448,7 @@ ShowConfig(*) {
             chkConfirmExit.Visible    := false
             ; msimeパネル
             for ctrl in [msimePanelChk,
+                         msimeKeyAssignChk,
                          msimeSpaceInit, msimeSpaceTo,
                          msimePunctInit, msimePunctTo]
                 ctrl.Visible := false
@@ -1394,6 +1476,8 @@ ShowConfig(*) {
             HideAll()
             msimePanelChk.Visible := true
             msimePanelChk.Value   := MsImeSettingsEnabled ? 1 : 0
+            msimeKeyAssignChk.Visible := true
+            msimeKeyAssignChk.Value   := KeyAssignmentEnabled ? 1 : 0
             for ctrl in [msimeSpaceInit, msimeSpaceTo, msimePunctInit, msimePunctTo]
                 ctrl.Visible := true
             for v in ["MsImeLblSpace","MsImeLblSpaceInit","MsImeLblSpaceTo",
@@ -1535,6 +1619,8 @@ ShowConfig(*) {
             global SpaceTargetVal := msimeSpaceTo.Value - 1
             global PunctInitVal   := msimePunctInit.Value - 1
             global PunctTargetVal := msimePunctTo.Value - 1
+            ; キー割り当て設定を反映
+            global KeyAssignmentEnabled := (msimeKeyAssignChk.Value = 1)
             ; 有効/無効のトグル
             newMsIme := (msimePanelChk.Value = 1)
             if (newMsIme != MsImeSettingsEnabled) {
@@ -1543,6 +1629,11 @@ ShowConfig(*) {
                 else
                     DisableMsImeSettings()
             } else if MsImeSettingsEnabled {
+                ; 有効状態のまま設定が変わった場合はレジストリへ即反映
+                if KeyAssignmentEnabled
+                    WriteKeyAssignmentEnable()
+                else
+                    WriteKeyAssignmentDisable()
                 UpdateMsImeMenu()
             }
         } else {
