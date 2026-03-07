@@ -1296,11 +1296,10 @@ ShowConfig(*) {
         "x" RX " y" SP+DescH " w" RW-80 " h" ItemLH " vItemList")
 
     BX := RX + RW - 76
-    btnAdd    := cfgGui.Add("Button", "x" BX " y" SP+DescH    " w72 h24", "追加")
-    btnEdit   := cfgGui.Add("Button", "x" BX " y" SP+DescH+28 " w72 h24", "編集")
-    btnDelete := cfgGui.Add("Button", "x" BX " y" SP+DescH+56 " w72 h24", "削除")
-    btnUp     := cfgGui.Add("Button", "x" BX " y" SP+DescH+88 " w72 h24", "↑ 上へ")
-    btnDown   := cfgGui.Add("Button", "x" BX " y" SP+DescH+116 " w72 h24", "↓ 下へ")
+    btnEdit   := cfgGui.Add("Button", "x" BX " y" SP+DescH    " w72 h24", "編集")
+    btnDelete := cfgGui.Add("Button", "x" BX " y" SP+DescH+28 " w72 h24", "削除")
+    btnUp     := cfgGui.Add("Button", "x" BX " y" SP+DescH+60 " w72 h24", "↑ 上へ")
+    btnDown   := cfgGui.Add("Button", "x" BX " y" SP+DescH+88 " w72 h24", "↓ 下へ")
 
     inputY := SP + DescH + ItemLH + SP
     valLabel  := cfgGui.Add("Text", "x" RX " y" inputY+4 " w28 h20 BackgroundTrans vValLabel", "値：")
@@ -1379,7 +1378,6 @@ ShowConfig(*) {
     btnCancel := cfgGui.Add("Button", "x" W-SP-80 " y" BtnY " w80  h28",          "キャンセル")
 
     catList.OnEvent("Change",        OnCategoryChange)
-    btnAdd.OnEvent("Click",          OnStartAdd)
     btnEdit.OnEvent("Click",         OnStartEdit)
     btnAddOK.OnEvent("Click",        OnCommitItem)
     btnDelete.OnEvent("Click",       OnDeleteItem)
@@ -1414,6 +1412,7 @@ ShowConfig(*) {
         idx := ctrl.Value
         if (idx = 0)
             return
+        ConfirmPendingInput()
         FlushItemList(ConfigSelectedIndex)
         editingIdx    := 0
         btnAddOK.Text := "追加"
@@ -1432,7 +1431,6 @@ ShowConfig(*) {
         ; 全コントロールを一旦隠す
         HideAll() {
             itemList.Visible          := false
-            btnAdd.Visible            := false
             btnEdit.Visible           := false
             btnDelete.Visible         := false
             btnUp.Visible             := false
@@ -1503,7 +1501,6 @@ ShowConfig(*) {
         } else {
             HideAll()
             itemList.Visible   := true
-            btnAdd.Visible     := true
             btnEdit.Visible    := true
             btnDelete.Visible  := true
             btnUp.Visible      := true
@@ -1521,13 +1518,26 @@ ShowConfig(*) {
     }
 
     ; ----------------------------------------------------------
-    ; 新規追加モードに入る
+    ; 値欄に未確定の入力が残っていたらユーザーに追加を確認する
+    ; list タイプのカテゴリーが対象。戻り値は常に true（処理続行）
     ; ----------------------------------------------------------
-    OnStartAdd(*) {
-        editingIdx := 0
-        inputEdit.Value := ""
-        btnAddOK.Text   := "追加"
-        inputEdit.Focus()
+    ConfirmPendingInput() {
+        cat := ConfigCategories[ConfigSelectedIndex]
+        if (cat["type"] != "list")
+            return
+        val := Trim(inputEdit.Value)
+        if (val = "")
+            return
+        action := (editingIdx = 0) ? "追加" : "更新"
+        msg := "値欄に入力が残っています：`n`n    " val "`n`nリストに" action "しますか？"
+        result := MsgBox(msg, "未確定の入力", "YesNo Icon?")
+        if (result = "Yes")
+            OnCommitItem()
+        else {
+            inputEdit.Value := ""
+            btnAddOK.Text   := "追加"
+            editingIdx      := 0
+        }
     }
 
     ; ----------------------------------------------------------
@@ -1645,6 +1655,7 @@ ShowConfig(*) {
     }
 
     OnSave(*) {
+        ConfirmPendingInput()
         FlushItemList(ConfigSelectedIndex)
         SaveConfig()
         Log("設定を変更しました")
@@ -1652,6 +1663,7 @@ ShowConfig(*) {
     }
 
     OnApply(*) {
+        ConfirmPendingInput()
         FlushItemList(ConfigSelectedIndex)
         SaveConfig()
         Log("設定を適用しました")
