@@ -337,6 +337,9 @@ LoadConfig() {
     logVal := Utf8IniRead(ConfigFilePath, "Advanced", "EnableLog", "0")
     EnableLog := (logVal = "1")
 
+    logKeyVal := Utf8IniRead(ConfigFilePath, "Advanced", "LogKeyInput", "0")
+    LogKeyInput := (logKeyVal = "1")
+
     confirmVal := Utf8IniRead(ConfigFilePath, "Advanced", "ConfirmExit", "1")
     ConfirmExit := (confirmVal = "1")
 
@@ -380,6 +383,7 @@ SaveConfig() {
     Utf8IniWrite Round(IdleTimeoutMs / 1000), ConfigFilePath, "General", "IdleTimeoutSec"
     Utf8IniWrite (SkipEmptyTitle ? "1" : "0"), ConfigFilePath, "Advanced", "SkipEmptyTitle"
     Utf8IniWrite (EnableLog     ? "1" : "0"), ConfigFilePath, "Advanced", "EnableLog"
+    Utf8IniWrite (LogKeyInput   ? "1" : "0"), ConfigFilePath, "Advanced", "LogKeyInput"
     Utf8IniWrite (ConfirmExit   ? "1" : "0"), ConfigFilePath, "Advanced", "ConfirmExit"
 
     Utf8IniWrite (MsImeSettingsEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "Enabled"
@@ -886,6 +890,10 @@ global SkipEmptyTitle := true
 ; オンにすると AlwaysIME_AHK.log へ動作ログを記録する
 global EnableLog := false
 
+; 入力キーをログに記録する（初期値：しない）
+; オフの場合はキー入力ログのキー名を * でマスクする
+global LogKeyInput := false
+
 ; トレイメニューから終了するとき確認メッセージを表示する（初期値：オン）
 global ConfirmExit := true
 
@@ -1035,7 +1043,7 @@ HandleKeyInput(key) {
     rawTitle    := WinGetTitle("A")
     normTitle   := NormalizeTitle(rawTitle)
 
-    Log("キー入力: `"" key "`" app=" processName " title=`"" normTitle "`"", "DEBUG")
+    Log("キー入力: `"" (LogKeyInput ? key : "*") "`" app=" processName " title=`"" normTitle "`"", "DEBUG")
 
     ; タイトル空欄スキップ（上級者向け設定）
     if (SkipEmptyTitle && rawTitle = "") {
@@ -1321,8 +1329,11 @@ ShowConfig(*) {
     chkDebugLog := cfgGui.Add("Checkbox",
         "x" RX " y" SP+DescH+30 " w" RW " h24 vChkDebugLog Hidden",
         ".logファイルを生成する（動作ログをファイルに記録する）")
+    chkLogKeyInput := cfgGui.Add("Checkbox",
+        "x" RX+16 " y" SP+DescH+54 " w" RW-16 " h24 vChkLogKeyInput Hidden",
+        "入力キーを記録する（オフの場合はキーを * でマスク）")
     chkConfirmExit := cfgGui.Add("Checkbox",
-        "x" RX " y" SP+DescH+60 " w" RW " h24 vChkConfirmExit Hidden",
+        "x" RX " y" SP+DescH+82 " w" RW " h24 vChkConfirmExit Hidden",
         "トレイメニューから終了するとき確認メッセージを表示する")
 
     ; ---- MS-IMEパネル（msimeタイプ専用） ----
@@ -1443,6 +1454,7 @@ ShowConfig(*) {
             spinUpDown.Visible        := false
             chkSkipEmptyTitle.Visible := false
             chkDebugLog.Visible       := false
+            chkLogKeyInput.Visible    := false
             chkConfirmExit.Visible    := false
             ; msimeパネル
             for ctrl in [msimePanelChk,
@@ -1468,6 +1480,8 @@ ShowConfig(*) {
             chkSkipEmptyTitle.Value   := SkipEmptyTitle ? 1 : 0
             chkDebugLog.Visible       := true
             chkDebugLog.Value         := EnableLog ? 1 : 0
+            chkLogKeyInput.Visible    := true
+            chkLogKeyInput.Value      := LogKeyInput ? 1 : 0
             chkConfirmExit.Visible    := true
             chkConfirmExit.Value      := ConfirmExit ? 1 : 0
         } else if (cat["type"] = "msime") {
@@ -1622,6 +1636,7 @@ ShowConfig(*) {
         } else if (cat["type"] = "advanced") {
             global SkipEmptyTitle := (chkSkipEmptyTitle.Value = 1)
             global EnableLog      := (chkDebugLog.Value = 1)
+            global LogKeyInput    := (chkLogKeyInput.Value = 1)
             global ConfirmExit    := (chkConfirmExit.Value = 1)
         } else if (cat["type"] = "msime") {
             ; DropDownList.Value は 1-based → レジストリ値 = Value - 1
