@@ -348,7 +348,13 @@ LoadConfig() {
     msimeVal := Utf8IniRead(ConfigFilePath, "MsIme", "Enabled", "0")
     MsImeSettingsEnabled := false   ; 読み込み後に EnableMsImeSettings() で有効化する
     SpaceInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceInitVal",   "0"))
-    SpaceTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "2"))
+    spaceTargetRaw := Utf8IniRead(ConfigFilePath, "MsIme", "SpaceTargetVal", "__NOTSET__")
+    if (spaceTargetRaw = "__NOTSET__") {
+        ; INI未設定 → グローバル変数の初期値（レジストリ実値から算出済み）をそのまま使用
+        Log("SpaceTargetVal: INI未設定のためレジストリ実値から算出 (" SpaceTargetVal ")")
+    } else {
+        SpaceTargetVal := Integer(spaceTargetRaw)
+    }
     PunctInitVal   := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctInitVal",   "1"))
     PunctTargetVal := Integer(Utf8IniRead(ConfigFilePath, "MsIme", "PunctTargetVal", "0"))
     keyAssignVal := Utf8IniRead(ConfigFilePath, "MsIme", "KeyAssignmentEnabled", "__NOTSET__")
@@ -480,7 +486,10 @@ global CurOption1       := -1
 ; ユーザー設定：スペースの初期値と切替先（レジストリ値 0-2）
 ; 起動時にレジストリから読んだ値を初期値として使う（-1 = レジストリ実値を使用）
 global SpaceInitVal   := -1   ; -1 = レジストリ実値をそのまま使う
-global SpaceTargetVal := IME_FULL_WIDTH_SPACE    ; 切替先デフォルト: 常に全角
+; 切替先デフォルト: レジストリ実値が 2(常に半角) なら 1(常に全角)、それ以外なら 2(常に半角)
+global SpaceTargetVal := (RegRead("HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME", "InputSpace", 0) = 2)
+    ? IME_FULL_WIDTH_SPACE
+    : IME_HALF_WIDTH_SPACE
 
 ; --- 句読点制御 (option1 ビットマスク) ---
 ; ビット位置: (value >> 16) & 0x3
