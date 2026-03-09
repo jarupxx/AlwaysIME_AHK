@@ -14,6 +14,21 @@ Persistent
 global ConfigFilePath := A_ScriptDir "\AlwaysIME_AHK.ini"
 
 ; ============================================================
+; アイコンを EXE に埋め込み、初回起動時に展開する
+; ============================================================
+EnsureResourceIcons() {
+    resDir := A_ScriptDir "\Resources"
+    if !DirExist(resDir)
+        DirCreate resDir
+
+    ; FileInstall でコンパイル時に EXE へ同梱される
+    ; 第3引数 1 = 上書き展開
+    FileInstall "Resources\icon_ime_on.ico",  resDir "\icon_ime_on.ico",  1
+    FileInstall "Resources\icon_ime_off.ico", resDir "\icon_ime_off.ico", 1
+    FileInstall "Resources\icon_ignore.ico",  resDir "\icon_ignore.ico",  1
+}
+
+; ============================================================
 ; アイコン設定
 ; 次にキーを押したらIMEがどう制御されるかをトレイで予告表示
 ; ファイルが存在しない場合はAHK組み込みアイコンで代替
@@ -1227,6 +1242,7 @@ A_TrayMenu.Add("ログファイルを削除", DeleteLogFile)
 A_TrayMenu.Add()
 A_TrayMenu.Add("終了", OnMenuExit)
 A_TrayMenu.Default := "設定を表示"
+EnsureResourceIcons()
 UpdateTrayIcon("ime_on")
 SetupWinEventHook()
 
