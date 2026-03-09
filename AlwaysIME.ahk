@@ -772,21 +772,21 @@ RebuildMsImeMenu() {
 
     if MsImeSettingsEnabled {
         if !TrayMenuHasMsImeItems {
-            ; 「終了」の前（位置6）にセパレータ・切替項目を挿入
+            ; 「終了」の前（位置7）にセパレータ・切替項目を挿入
             ; Insert は指定位置の「前」に追加される
-            A_TrayMenu.Insert("6&")                              ; セパレータ
-            A_TrayMenu.Insert("6&", "句読点切替", TogglePunctuation)
-            A_TrayMenu.Insert("6&", "スペース切替", ToggleInputSpace)
+            A_TrayMenu.Insert("7&")                              ; セパレータ
+            A_TrayMenu.Insert("7&", "句読点切替", TogglePunctuation)
+            A_TrayMenu.Insert("7&", "スペース切替", ToggleInputSpace)
             TrayMenuHasMsImeItems := true
         }
         UpdateMsImeMenu()
     } else {
         if TrayMenuHasMsImeItems {
             ; 挿入した3項目（スペース切替・句読点切替・セパレータ）を削除
-            ; 有効時の構成: 6=スペース切替 7=句読点切替 8=セパレータ
+            ; 有効時の構成: 7=スペース切替 8=句読点切替 9=セパレータ
+            A_TrayMenu.Delete("9&")
             A_TrayMenu.Delete("8&")
             A_TrayMenu.Delete("7&")
-            A_TrayMenu.Delete("6&")
             TrayMenuHasMsImeItems := false
         }
     }
@@ -802,19 +802,19 @@ UpdateMsImeMenu() {
     if !MsImeSettingsEnabled
         return
 
-    ; スペース切替（位置6）：クリック後に適用される値のラベルを表示
+    ; スペース切替（位置7）：クリック後に適用される値のラベルを表示
     spaceInitVal  := (SpaceInitVal >= 0) ? SpaceInitVal : CurInputSpace
     nextSpace     := (CurInputSpace = SpaceTargetVal) ? spaceInitVal : SpaceTargetVal
     nextSpaceLabel := (nextSpace >= 0 && nextSpace <= 2)
         ? InputSpaceLabels[nextSpace + 1] : "─"
-    A_TrayMenu.Rename("6&", "スペース：" nextSpaceLabel " に切替")
+    A_TrayMenu.Rename("7&", "スペース：" nextSpaceLabel " に切替")
 
-    ; 句読点切替（位置7）：クリック後に適用される値のラベルを表示
+    ; 句読点切替（位置8）：クリック後に適用される値のラベルを表示
     punctInitVal  := (PunctInitVal >= 0) ? PunctInitVal : CurOption1
     nextPunct     := (CurOption1 = PunctTargetVal) ? punctInitVal : PunctTargetVal
     nextPunctLabel := (nextPunct >= 0 && nextPunct <= 3)
         ? PunctuationLabels[nextPunct + 1] : "─"
-    A_TrayMenu.Rename("7&", "句読点：" nextPunctLabel " に切替")
+    A_TrayMenu.Rename("8&", "句読点：" nextPunctLabel " に切替")
 }
 
 ; MS-IME入力設定の有効/無効をトグル
@@ -1194,8 +1194,33 @@ OnExit(OnExitHandler)
 ; MS-IME入力設定サブメニューは廃止。切替項目はメインメニューに直接追加する。
 global TrayMenuHasMsImeItems := false
 
+; ============================================================
+; トレイメニュー構成（固定部分）
+;
+; 無効時（MsImeSettingsEnabled = false）:
+;   1: 設定を表示
+;   2: IMEオフに登録
+;   3: セパレータ
+;   4: ログファイルを開く
+;   5: ログファイルを削除
+;   6: セパレータ
+;   7: 終了
+;
+; 有効時（MsImeSettingsEnabled = true）:
+;   1: 設定を表示
+;   2: IMEオフに登録
+;   3: セパレータ
+;   4: ログファイルを開く
+;   5: ログファイルを削除
+;   6: セパレータ
+;   7: スペース切替  ← RebuildMsImeMenu() で挿入
+;   8: 句読点切替   ← RebuildMsImeMenu() で挿入
+;   9: セパレータ   ← RebuildMsImeMenu() で挿入
+;  10: 終了
+; ============================================================
 A_TrayMenu.Delete()
 A_TrayMenu.Add("設定を表示", ShowConfig)
+A_TrayMenu.Add("IMEオフに登録", ShowRegisterForceOff)
 A_TrayMenu.Add()
 A_TrayMenu.Add("ログファイルを開く", OpenLogFile)
 A_TrayMenu.Add("ログファイルを削除", DeleteLogFile)
@@ -1216,6 +1241,146 @@ OnMenuExit(*) {
             return
     }
     ExitApp()
+}
+
+; ============================================================
+; 「IMEオフに登録」ダイアログ
+; トレイメニュークリック直前にフォーカスを持っていたウィンドウを
+; ForceOffApps（アプリ名モード）または TitleOffPatterns（タイトルモード）に追加する
+;
+; 除外対象:
+;   - タイトルが空欄の explorer.exe
+;   - 自プロセス AutoHotkey64.exe
+; ============================================================
+ShowRegisterForceOff(*) {
+    ; ---------------------------------------------------------
+    ; トレイメニューが開く直前にフォーカスを持っていたウィンドウを探す
+    ; AHK自身・タイトル空欄のexplorer.exeを除外して最初に見つかった
+    ; ウィンドウを対象とする
+    ; ---------------------------------------------------------
+    targetHwnd    := 0
+    targetTitle   := ""
+    targetProcess := ""
+
+    ; WinGetList で Z オーダー順に全ウィンドウを走査
+    winList := WinGetList()
+    for hwnd in winList {
+        try {
+            proc  := StrLower(WinGetProcessName(hwnd))
+            title := WinGetTitle(hwnd)
+        } catch {
+            continue
+        }
+        ; 自プロセスを除外
+        if (proc = "autohotkey64.exe")
+            continue
+        ; タイトル空欄の explorer.exe を除外
+        if (proc = "explorer.exe" && title = "")
+            continue
+        ; 最小化・不可視を除外（GetMinMax: -1=最小化, 0=通常, 1=最大化）
+        try {
+            minMax := WinGetMinMax(hwnd)
+        } catch {
+            minMax := 0
+        }
+        if (minMax = -1)
+            continue
+        ; スタイルに WS_VISIBLE(0x10000000) がないウィンドウを除外
+        style := WinGetStyle(hwnd)
+        if !(style & 0x10000000)
+            continue
+
+        targetHwnd    := hwnd
+        targetTitle   := title
+        targetProcess := WinGetProcessName(hwnd)
+        break
+    }
+
+    ; ---------------------------------------------------------
+    ; ダイアログ構築
+    ; ---------------------------------------------------------
+    dlg := Gui("-MinimizeBox -MaximizeBox", "IMEオフに登録")
+    dlg.SetFont("s9", "Meiryo UI")
+    dlg.MarginX := 16
+    dlg.MarginY := 12
+
+    LBL_W  := 52
+    EDIT_W := 280
+    ROW_H  := 24
+    SP     := 8
+
+    ; タイトル行
+    dlg.Add("Text",  "x16 y16 w" LBL_W " h" ROW_H " +0x200", "タイトル：")
+    edTitle := dlg.Add("Edit", "x" (16 + LBL_W + SP) " y16 w" EDIT_W " h" ROW_H, targetTitle)
+
+    ; アプリ名行
+    dlg.Add("Text",  "x16 y" (16 + ROW_H + SP) " w" LBL_W " h" ROW_H " +0x200", "アプリ名：")
+    edProc  := dlg.Add("Edit", "x" (16 + LBL_W + SP) " y" (16 + ROW_H + SP) " w" EDIT_W " h" ROW_H " ReadOnly", targetProcess)
+
+    ; ラジオボタン（タイトル / アプリ名）
+    RAD_Y := 16 + (ROW_H + SP) * 2 + 4
+    RAD_X := 16 + LBL_W + SP
+    radTitle := dlg.Add("Radio", "x" RAD_X " y" RAD_Y " w100 h20 Group", "タイトル")
+    radProc  := dlg.Add("Radio", "x" (RAD_X + 110) " y" RAD_Y " w100 h20 Checked", "アプリ名")
+
+    ; ボタン行
+    BTN_Y := RAD_Y + 28
+    TOTAL_W := LBL_W + SP + EDIT_W
+    btnOK     := dlg.Add("Button", "x" (16 + LBL_W + SP) " y" BTN_Y " w100 h26 Default", "登録(&R)")
+    btnCancel := dlg.Add("Button", "x" (16 + LBL_W + SP + 110) " y" BTN_Y " w100 h26", "キャンセル(&C)")
+
+    ; ---------------------------------------------------------
+    ; ボタンイベント
+    ; ---------------------------------------------------------
+    btnOK.OnEvent("Click", OnRegisterOK)
+    btnCancel.OnEvent("Click", (*) => dlg.Destroy())
+    dlg.OnEvent("Close", (*) => dlg.Destroy())
+
+    OnRegisterOK(*) {
+        if radProc.Value {
+            ; アプリ名モード → ForceOffApps に追加（小文字化して重複チェック）
+            proc := StrLower(targetProcess)
+            for app in ForceOffApps {
+                if (StrLower(app) = proc) {
+                    MsgBox "「" targetProcess "」はすでに IME-OFFアプリ に登録されています。",
+                        "IMEオフに登録", "Icon!"
+                    return
+                }
+            }
+            ForceOffApps.Push(proc)
+            SaveConfig()
+            Log("IMEオフに登録（アプリ名）: " proc)
+            dlg.Destroy()
+            MsgBox "「" targetProcess "」を IME-OFFアプリ に登録しました。",
+                "IMEオフに登録", "Iconi"
+            return
+        } else {
+            ; タイトルモード → TitleOffPatterns にエスケープして追加
+            rawT := Trim(edTitle.Value)
+            if (rawT = "") {
+                MsgBox "タイトルが空欄のため登録できません。", "IMEオフに登録", "Icon!"
+                return
+            }
+            ; 正規表現の特殊文字をエスケープ
+            escaped := RegExReplace(rawT, "([\\^$.|?*+(){}\[\]])", "\$1")
+            for pat in TitleOffPatterns {
+                if (pat = escaped) {
+                    MsgBox "このタイトルはすでに IME-OFFタイトルパターン に登録されています。",
+                        "IMEオフに登録", "Icon!"
+                    return
+                }
+            }
+            TitleOffPatterns.Push(escaped)
+            SaveConfig()
+            Log("IMEオフに登録（タイトル）: " escaped)
+            dlg.Destroy()
+            MsgBox "タイトル「" rawT "」を IME-OFFタイトルパターン に登録しました。",
+                "IMEオフに登録", "Iconi"
+            return
+        }
+    }
+
+    dlg.Show("AutoSize")
 }
 
 ; ============================================================
