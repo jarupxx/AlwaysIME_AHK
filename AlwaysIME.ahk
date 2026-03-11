@@ -102,6 +102,10 @@ RefreshActiveWindow() {
     }
     normTitle := NormalizeTitle(rawTitle)
 
+    ; タイトル空欄の explorer.exe は常にスルー（タスクバークリック対策）
+    if (processName = "explorer.exe" && rawTitle = "")
+        return
+
     ; タイトル空欄スキップ（上級者向け設定）
     if (SkipEmptyTitle && rawTitle = "") {
         UpdateTrayIcon("through")
