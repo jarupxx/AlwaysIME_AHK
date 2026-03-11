@@ -25,7 +25,7 @@ EnsureResourceIcons() {
     ; 第3引数 1 = 上書き展開
     FileInstall "Resources\icon_ime_on.ico",  resDir "\icon_ime_on.ico",  1
     FileInstall "Resources\icon_ime_off.ico", resDir "\icon_ime_off.ico", 1
-    FileInstall "Resources\icon_ignore.ico",  resDir "\icon_ignore.ico",  1
+    FileInstall "Resources\icon_through.ico", resDir "\icon_through.ico", 1
 }
 
 ; ============================================================
@@ -37,23 +37,23 @@ EnsureResourceIcons() {
 ; アイコンファイルパス（スクリプトと同じフォルダに配置）
 ; icon_ime_on.ico      : 次キー → IME-ONにする（通常動作）
 ; icon_ime_off.ico     : 次キー → IME-OFFにする
-; icon_ignore.ico      : 次キー → IME制御なし（IgnoreApps）
+; icon_through.ico     : 次キー → IME制御なし（ThroughApps）
 global IconImeOn      := A_ScriptDir "\Resources\icon_ime_on.ico"
 global IconImeOff     := A_ScriptDir "\Resources\icon_ime_off.ico"
-global IconIgnore     := A_ScriptDir "\Resources\icon_ignore.ico"
+global IconThrough    := A_ScriptDir "\Resources\icon_through.ico"
 
 ; AHK組み込みアイコンのフォールバック番号（.icoが存在しない場合に使用）
 global IconFallbackMap := Map(
     "ime_on",     [A_AhkPath, 2],
     "ime_off",    [A_AhkPath, 7],
-    "ignore",     [A_AhkPath, 8]
+    "through",    [A_AhkPath, 8]
 )
 
 ; 現在表示中のアイコンモード（無駄な再設定を防ぐ）
 global CurrentIconMode := ""
 
 ; トレイアイコンを更新する
-; mode: "ime_on" / "ime_off" / "ignore"
+; mode: "ime_on" / "ime_off" / "through"
 UpdateTrayIcon(mode) {
     global CurrentIconMode
     if (CurrentIconMode = mode)
@@ -62,7 +62,7 @@ UpdateTrayIcon(mode) {
 
     icoPath := (mode = "ime_on")  ? IconImeOn
              : (mode = "ime_off") ? IconImeOff
-             : IconIgnore
+             : IconThrough
 
     if FileExist(icoPath) {
         TraySetIcon icoPath
@@ -104,14 +104,14 @@ RefreshActiveWindow() {
 
     ; タイトル空欄スキップ（上級者向け設定）
     if (SkipEmptyTitle && rawTitle = "") {
-        UpdateTrayIcon("ignore")
+        UpdateTrayIcon("through")
         return
     }
 
-    ; IgnoreApps: 制御しない
-    for app in IgnoreApps {
+    ; ThroughApps: 制御しない
+    for app in ThroughApps {
         if (processName = app) {
-            UpdateTrayIcon("ignore")
+            UpdateTrayIcon("through")
             return
         }
     }
@@ -335,10 +335,10 @@ LoadConfig() {
     }
     Log("設定ファイルを読み込みます: " ConfigFilePath)
 
-    global IgnoreApps, ForceOffApps, TitleOffPatterns, TitleIgnoreTags, IdleTimeoutMs
+    global ThroughApps, ForceOffApps, TitleOffPatterns, TitleIgnoreTags, IdleTimeoutMs
     global SkipEmptyTitle, EnableLog, ConfirmExit
 
-    IgnoreApps      := ReadIniList("IgnoreApps")
+    ThroughApps     := ReadIniList("ThroughApps")
     ForceOffApps    := ReadIniList("ForceOffApps")
     TitleOffPatterns := ReadIniList("TitleOffPatterns")
     TitleIgnoreTags := ReadIniList("TitleIgnoreTags")
@@ -381,7 +381,7 @@ LoadConfig() {
     }
 
     Log("設定読み込み完了 (IdleTimeout=" Round(IdleTimeoutMs/1000) "秒"
-      . " IgnoreApps=" IgnoreApps.Length
+      . " ThroughApps=" ThroughApps.Length
       . " ForceOffApps=" ForceOffApps.Length
       . " TitleOffPatterns=" TitleOffPatterns.Length
       . " TitleIgnoreTags=" TitleIgnoreTags.Length
@@ -414,7 +414,7 @@ SaveConfig() {
     Utf8IniWrite PunctTargetVal, ConfigFilePath, "MsIme", "PunctTargetVal"
     Utf8IniWrite (KeyAssignmentEnabled ? "1" : "0"), ConfigFilePath, "MsIme", "KeyAssignmentEnabled"
 
-    WriteIniList("IgnoreApps",       IgnoreApps)
+    WriteIniList("ThroughApps",      ThroughApps)
     WriteIniList("ForceOffApps",     ForceOffApps)
     WriteIniList("TitleOffPatterns", TitleOffPatterns)
     WriteIniList("TitleIgnoreTags",  TitleIgnoreTags)
@@ -877,7 +877,7 @@ CModeName(cmode) {
 ; ============================================================
 
 ; IMEを制御しないアプリ（完全一致）
-global IgnoreApps := [
+global ThroughApps := [
     "AutoHotkey64.exe",
 ]
 
@@ -1072,16 +1072,16 @@ HandleKeyInput(key) {
     ; タイトル空欄スキップ（上級者向け設定）
     if (SkipEmptyTitle && rawTitle = "") {
         Log("スキップ: タイトル空欄 (" processName ")", "DEBUG")
-        UpdateTrayIcon("ignore")
+        UpdateTrayIcon("through")
         SendInput key
         return
     }
 
-    ; IgnoreApps: 制御しない
-    for app in IgnoreApps {
+    ; ThroughApps: 制御しない
+    for app in ThroughApps {
         if (processName = app) {
-            Log("スキップ: IgnoreApps に一致 (" processName ")", "DEBUG")
-            UpdateTrayIcon("ignore")
+            Log("スキップ: ThroughApps に一致 (" processName ")", "DEBUG")
+            UpdateTrayIcon("through")
             SendInput key
             return
         }
@@ -1408,7 +1408,7 @@ ShowRegisterForceOff(*) {
 ; type: "list" = 1行1項目テキストエリア / "seconds" = 数値スピナー
 global ConfigCategories := [
     Map(
-        "key",   "IgnoreApps",
+        "key",   "ThroughApps",
         "label", "制御しないアプリ",
         "desc",  "IMEを一切操作しないアプリ。`n実行ファイル名を1行1件入力。`n例: AutoHotkey64.exe",
         "type",  "list"
@@ -1877,8 +1877,8 @@ ShowConfig(*) {
 
 ; グローバル配列をキー名で取得
 GetGlobalArray(key) {
-    if (key = "IgnoreApps")
-        return IgnoreApps
+    if (key = "ThroughApps")
+        return ThroughApps
     if (key = "ForceOffApps")
         return ForceOffApps
     if (key = "TitleOffPatterns")
@@ -1890,8 +1890,8 @@ GetGlobalArray(key) {
 
 ; グローバル配列をキー名でセット
 SetGlobalArray(key, arr) {
-    if (key = "IgnoreApps") {
-        global IgnoreApps := arr
+    if (key = "ThroughApps") {
+        global ThroughApps := arr
     } else if (key = "ForceOffApps") {
         global ForceOffApps := arr
     } else if (key = "TitleOffPatterns") {
