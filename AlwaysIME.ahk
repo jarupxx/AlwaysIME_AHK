@@ -78,6 +78,21 @@ UpdateTrayIcon(mode) {
 }
 
 ; ============================================================
+; デスクトップ通知（トースト）を表示する
+; title : 通知タイトル
+; msg   : 本文
+; icon  : 1=情報(ℹ) / 2=警告(⚠) / 3=エラー(✕)  省略時は1
+; ============================================================
+ToastNotify(title, msg, icon := 1) {
+    ; TrayTip のアイコン種別は Options の下位2ビットで指定
+    ; 1=Info  2=Warning  3=Error  (0=アイコンなし)
+    TrayTip msg, title, icon
+    ; Windows 11 では TrayTip だけでは表示されない場合がある。
+    ; 一時的にトレイアイコンを揺らすことで通知をトリガーする。
+    SetTimer () => TrayTip(), -4000
+}
+
+; ============================================================
 ; アクティブウィンドウの変化を検知してアイコンを先行更新する
 ; WinEventHook: EVENT_SYSTEM_FOREGROUND と EVENT_OBJECT_NAMECHANGE
 ; ============================================================
@@ -1371,8 +1386,7 @@ ShowRegisterForceOff(*) {
             SaveConfig()
             Log("IMEオフに登録（アプリ名）: " proc)
             dlg.Destroy()
-            MsgBox "「" targetProcess "」を IME-OFFアプリ に登録しました。",
-                "IMEオフに登録", "Iconi"
+            ToastNotify("IMEオフに登録", "「" targetProcess "」を IME-OFFアプリ に登録しました。")
             return
         } else {
             ; タイトルモード → TitleOffPatterns にエスケープして追加
@@ -1394,8 +1408,7 @@ ShowRegisterForceOff(*) {
             SaveConfig()
             Log("IMEオフに登録（タイトル）: " escaped)
             dlg.Destroy()
-            MsgBox "タイトル「" rawT "」を IME-OFFタイトルパターン に登録しました。",
-                "IMEオフに登録", "Iconi"
+            ToastNotify("IMEオフに登録", "タイトル「" rawT "」を IME-OFFタイトルパターン に登録しました。")
             return
         }
     }
@@ -1920,6 +1933,6 @@ DeleteLogFile(*) {
     result := MsgBox("ログファイルを削除しますか？`n" LogFilePath, "確認", "YesNo")
     if (result = "Yes") {
         FileDelete LogFilePath
-        MsgBox "削除しました。", "完了"
+        ToastNotify("完了", "ログファイルを削除しました。")
     }
 }
