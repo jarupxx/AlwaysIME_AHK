@@ -521,7 +521,7 @@ global CurOption1       := -1
 ; 起動時にレジストリから読んだ値を初期値として使う（-1 = レジストリ実値を使用）
 global SpaceInitVal   := -1   ; -1 = レジストリ実値をそのまま使う
 ; 切替先デフォルト: レジストリ実値が 2(常に半角) なら 1(常に全角)、それ以外なら 2(常に半角)
-global SpaceTargetVal := (RegRead("HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME", "InputSpace", 0) = 2)
+global SpaceTargetVal := (RegRead(MSIME_REG_PATH, "InputSpace", 0) = 2)
     ? IME_FULL_WIDTH_SPACE
     : IME_HALF_WIDTH_SPACE
 
@@ -547,7 +547,7 @@ global PunctTargetVal := IME_COMMA_KUTENN    ; 切替先デフォルト: ，。
 ; KeyAssignmentHenkan    : 0=IME-ON（変換キー）
 ; KeyAssignmentMuhenkan  : 1=IME-OFF（無変換キー）
 ; 初期値はレジストリ実値から読む（INIが存在すれば後でLoadConfigが上書き）
-global KeyAssignmentEnabled := (RegRead("HKCU\Software\Microsoft\IME\15.0\IMEJP\MSIME", "IsKeyAssignmentEnabled", 0) = 1)
+global KeyAssignmentEnabled := (RegRead(MSIME_REG_PATH, "IsKeyAssignmentEnabled", 0) = 1)
 global OrigKeyAssignmentEnabled := -1  ; 起動時の元の値（-1=未取得）
 
 ; ============================================================
